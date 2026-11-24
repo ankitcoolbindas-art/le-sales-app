@@ -37,17 +37,22 @@ const LESync = (() => {
 
   function queue(id) { savePending([...pending(), id]); }
 
+  let again = false;
   async function flush(getRec) {
-    if (!col || flushing) return;
+    if (!col) return;
+    if (flushing) { again = true; return; }   // new entries saved mid-flush get picked up below
     flushing = true;
     try {
-      for (const id of pending()) {
-        const r = getRec(id);
-        if (!r) { savePending(pending().filter(x => x !== id)); continue; }
-        const clean = JSON.parse(JSON.stringify(r)); clean.open = LE.isOpen(r);
-        await col.doc(id).set(clean, {merge: true});  // resolves after server ack
-        savePending(pending().filter(x => x !== id));
-      }
+      do {
+        again = false;
+        for (const id of pending()) {
+          const r = getRec(id);
+          if (!r) { savePending(pending().filter(x => x !== id)); continue; }
+          const clean = JSON.parse(JSON.stringify(r)); clean.open = LE.isOpen(r);
+          await col.doc(id).set(clean, {merge: true});  // resolves after server ack
+          savePending(pending().filter(x => x !== id));
+        }
+      } while (again || pending().length);
       if (navigator.onLine) setState('live');
     } catch (e) { console.warn('flush failed', e); setState(navigator.onLine ? 'error' : 'offline'); }
     finally { flushing = false; }

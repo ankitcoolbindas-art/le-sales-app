@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LE Sales — Owner panel</title>
+<meta name="theme-color" content="#06080d">
+<meta name="robots" content="noindex">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="owner">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4 14h6.5L9.5 22 20 9.5h-6.6z" fill="#ffc53d"/></symbol>
+</svg>
+<header class="top">
+  <div class="logo"><span class="mark"><svg viewBox="0 0 24 24"><use href="#i-bolt"/></svg></span>
+    <span><b>Owner panel</b><small>Lalit Enterprises · Sales live</small></span></div>
+  <span id="who" class="who"></span>
+</header>
+<main id="view"></main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="firebase-config.js"></script>
+<script src="common.js"></script>
+<script src="sync.js"></script>
+<script src="owner.js"></script>
+</body>
+</html>

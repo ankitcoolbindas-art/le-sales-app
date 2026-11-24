@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LE Sales — Lalit Enterprises</title>
+<meta name="description" content="Salesperson tracker for Lalit Enterprises, Ranchi: visits with GPS, quotations, follow-ups, orders, collections and a daily WhatsApp report.">
+<meta name="theme-color" content="#06080d">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LE Sales">
+<link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4 14h6.5L9.5 22 20 9.5h-6.6z" fill="#ffc53d"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="logo"><span class="mark"><svg viewBox="0 0 24 24"><use href="#i-bolt"/></svg></span>
+    <span><b>LE Sales</b><small>Lalit Enterprises · Ranchi</small></span></div>
+  <span id="who" class="who"></span>
+</header>
+
+<main id="view"></main>
+
+<nav class="tabs" role="tablist">
+  <button data-tab="home" class="on"><span>🏠</span>Today</button>
+  <button data-tab="follow"><span>⏰</span>Follow-ups<i id="fbadge" hidden></i></button>
+  <button data-tab="records"><span>📋</span>Records</button>
+  <button data-tab="settings"><span>⚙️</span>Settings</button>
+</nav>
+
+<div id="sheet" class="sheet" hidden><div class="sheet-in" id="sheetIn"></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="firebase-config.js"></script>
+<script src="common.js"></script>
+<script src="sync.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

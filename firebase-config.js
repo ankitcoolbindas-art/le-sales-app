@@ -14,4 +14,11 @@
  * The Firebase web config is not a secret (Google designs it to be public). Access is controlled by
  * firestore.rules + the private Team code that you type into each phone — never put the Team code here.
  */
-window.LE_FIREBASE = null;
+window.LE_FIREBASE = {
+  apiKey: "AIzaSyBGYVmyzSIq9W50l5-2Y937pgd9TTIKBOA",
+  authDomain: "le-sales-app.firebaseapp.com",
+  projectId: "le-sales-app",
+  storageBucket: "le-sales-app.firebasestorage.app",
+  messagingSenderId: "526461428939",
+  appId: "1:526461428939:web:78bbdd38b45841aa18e74e"
+};

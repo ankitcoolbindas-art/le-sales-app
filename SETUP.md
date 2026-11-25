@@ -26,7 +26,7 @@ that person's records.
 
 ## 3. Owner first login (Ankit, one time)
 
-1. Open the app and tap **First-time owner setup**. The email is fixed to `ankitcoolbindas@gmail.com`.
+1. Open the hidden owner-setup page: https://ankitcoolbindas-art.github.io/le-sales-app/#/owner-setup (it is not linked from the login screen). The email is fixed to `ankitcoolbindas@gmail.com`.
 2. Choose your own password (at least 8 characters) and tap **Create owner account**.
 3. Firebase emails a verification link to ankitcoolbindas@gmail.com. Open it (check spam).
 4. Back in the app, check your name and phone, then tap **I've verified — continue**. You are now the **Admin**.
@@ -102,3 +102,10 @@ No account can hard-delete records. Delete only hides an entry.
     `js/core.js`.
 - Phones work offline. Entries are queued and sync automatically when back online.
 - On a shared computer, sign out after use. Data cached for offline use stays in that browser.
+
+## Recovery: owner setup page (hidden)
+The login screen no longer shows "First-time owner setup" (the admin account is already claimed).
+If the owner account ever has to be recreated (e.g. a new Firebase project), open
+`https://ankitcoolbindas-art.github.io/le-sales-app/#/owner-setup`. It only works for `ankitcoolbindas@gmail.com`
+after email verification, and Firestore rules still decide who can become admin. If the account already exists,
+use **Forgot password?** on the normal sign-in screen instead.

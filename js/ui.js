@@ -122,8 +122,11 @@ addEventListener('hashchange', () => render());
 /* ---------- auth screens ---------- */
 function authWrap(inner) { root.innerHTML = `<div class="auth"><div class="auth-card">${brand('Sales force · Lalit Enterprises')}<div class="card">${inner}</div><p class="note" style="text-align:center;margin-top:14px">Lalit Enterprises · Ranchi · since 1991</p></div></div>`; }
 const msgs = () => (st.authErr ? `<div class="err">${esc(st.authErr)}</div>` : '') + (st.authMsg ? `<div class="ok">${esc(st.authMsg)}</div>` : '');
+const OWNER_SETUP_HASH = '#/owner-setup';   // hidden recovery route (see SETUP.md); not linked from the login screen
+addEventListener('hashchange', () => { if (!S.user) { st.authMode = location.hash === OWNER_SETUP_HASH ? 'setup' : 'login'; st.authErr = st.authMsg = ''; authScreen(); } });
 function authScreen() {
   st.shellFor = '';
+  if (location.hash === OWNER_SETUP_HASH) st.authMode = 'setup';
   if (st.authMode === 'setup') {
     authWrap(`<h1>First-time owner setup</h1><p class="sub">For the owner only. Creates the admin login for <b>${BOOT_EMAIL}</b>. Employees are added later by the owner.</p>
       <form id="af"><label class="f">Owner email<input value="${BOOT_EMAIL}" readonly></label>
@@ -136,14 +139,14 @@ function authScreen() {
       if (f.pw.value !== f.pw2.value) { st.authErr = 'Passwords do not match.'; return authScreen(); }
       busy(f, true);
       try { await DB.ownerSignup(f.pw.value); }
-      catch (er) { st.authErr = er.code === 'auth/email-already-in-use' ? 'The owner account already exists. Sign in with its password, or use "Forgot password" to set a new one.' : LE.errMsg(er); st.authMode = er.code === 'auth/email-already-in-use' ? 'login' : 'setup'; authScreen(); }
+      catch (er) { st.authErr = er.code === 'auth/email-already-in-use' ? 'The owner account already exists. Sign in with its password, or use "Forgot password" to set a new one.' : LE.errMsg(er); st.authMode = er.code === 'auth/email-already-in-use' ? 'login' : 'setup'; if (st.authMode === 'login') history.replaceState(null, '', location.pathname + location.search); authScreen(); }
     };
   } else {
     authWrap(`<h1>Sign in</h1><p class="sub">Use the email and password given by the owner.</p>
       <form id="af"><label class="f">Email<input name="email" type="email" required autocomplete="username" inputmode="email" value="${esc(st.lastEmail || '')}"></label>
       <label class="f">Password<input name="pw" type="password" required autocomplete="current-password"></label>
       ${msgs()}<button class="btn pri lg full" style="margin-top:16px">Sign in</button></form>
-      <div class="links"><a data-am="forgot">Forgot password?</a><a data-am="setup">First-time owner setup</a></div>`);
+      <div class="links"><a data-am="forgot">Forgot password?</a></div>`);
     $('#af').onsubmit = async e => {
       e.preventDefault(); const f = e.target; st.authErr = st.authMsg = ''; st.lastEmail = f.email.value; busy(f, true);
       try { await DB.login(f.email.value, f.pw.value); } catch (er) { st.authErr = LE.errMsg(er); authScreen(); }
@@ -156,6 +159,7 @@ function authScreen() {
       try { await DB.resetPw(em); st.authErr = ''; st.authMsg = `If ${em} has an account, a password reset link has been sent. Check inbox and spam.`; } catch (er) { st.authErr = LE.errMsg(er); }
       st.lastEmail = em; return authScreen();
     }
+    if (a.dataset.am === 'login' && location.hash === OWNER_SETUP_HASH) { history.replaceState(null, '', location.pathname + location.search); }
     st.authMode = a.dataset.am; st.authErr = st.authMsg = ''; authScreen();
   });
 }

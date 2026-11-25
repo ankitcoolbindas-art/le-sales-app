@@ -168,7 +168,7 @@ V.map = {mgr: true, title: 'Map', render() {
     const sales = people().filter(u => u.active && u.role === 'sales');
     const rows = sales.map(u => ({u, l: S.lastLoc.get(u.uid)})).sort((a, b) => ((b.l || {}).ts || 0) - ((a.l || {}).ts || 0));
     const nLive = rows.filter(x => x.l && fresh(x.l.ts)[1] === 'live').length;
-    return `<div class="page-h"><div><h1>Live locations</h1><p>${nLive} of ${sales.length} salespeople live now · updates every ~2 min while their app is open</p></div><div class="toolbar">${modes}</div></div>
+    return `<div class="page-h"><div><h1>Live locations</h1><p>${nLive} of ${sales.length} salespeople live now · updates every ~3 min all day from the Android app after Start day (web: every ~2 min while open)</p></div><div class="toolbar">${modes}</div></div>
      <div class="dash two"><div class="card"><div class="mapbox tall" id="mapslot"></div>
       <div class="legend"><span><i style="background:#3ddc97"></i>seen &lt; 5 min</span><span><i style="background:#ffc53d"></i>&lt; 30 min</span><span><i style="background:#77829a"></i>older</span></div></div>
       <div class="card pad0"><div class="card-h" style="padding:14px 16px 0"><h3>Salespeople</h3><span class="sub">last seen</span></div><div class="list">

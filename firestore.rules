@@ -7,6 +7,9 @@ rules_version = '2';
 //  - admin: everything a manager can, plus create/update users and targets.
 //  - Bootstrap: the owner email (verified) may create its own admin profile once.
 //  - Nothing can be hard-deleted.
+//  - v3 attendance & payroll: employees check in / out once a day (today only, IST, server time, selfie required);
+//    admin overrides with a reason; managers read attendance but never salary/payroll; payroll is admin-only,
+//    an employee reads only their own FINALIZED payslips; finalized payslips are locked.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -109,6 +112,161 @@ service cloud.firestore {
       allow list: if isMgr();
       allow create, update: if isActive() && uid == request.auth.uid && validLoc(uid);
       allow delete: if false;
+    }
+
+    // ---- v3: attendance, leave, payroll ----
+    // "today" in India (IST = UTC+5:30) from the server clock; ds is 'YYYY-MM-DD'
+    function isTodayIST(ds) {
+      let t = request.time + duration.value(330, 'm');
+      return ds is string && ds.size() == 10 && ds.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && int(ds[0:4]) == t.year() && int(ds[5:7]) == t.month() && int(ds[8:10]) == t.day();
+    }
+    function isDate(ds) { return ds is string && ds.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function nearNow(ms) { return ms is number && ms > request.time.toMillis() - 900000 && ms < request.time.toMillis() + 300000; }
+    function optCoord(d, la, ln, ac) {
+      return (!(la in d) || (d[la] is number && d[la] >= -90 && d[la] <= 90))
+        && (!(ln in d) || (d[ln] is number && d[ln] >= -180 && d[ln] <= 180))
+        && (!(ac in d) || d[ac] is number);
+    }
+    function optStr(d, k, n) { return !(k in d) || (d[k] is string && d[k].size() <= n); }
+    function isStaff() { return isActive() && prof().role in ['sales', 'manager']; }
+    function photoPath(id) { return /databases/$(database)/documents/attendancePhotos/$(id); }
+    function ovOk(d) {
+      return d.ovStatus in ['P', 'H', 'A', 'L', 'LWP', 'WO', 'HO']
+        && d.ovReason is string && d.ovReason.size() > 0 && d.ovReason.size() <= 300
+        && d.ovBy == request.auth.uid && d.ovAt == request.time;
+    }
+
+    // /attendance/{uid}_{YYYY-MM-DD}
+    match /attendance/{id} {
+      allow get, list: if isMgr() || (isActive() && resource.data.uid == request.auth.uid);
+      // check-in: own, today (IST, server clock), once (create only), selfie written in the same batch
+      allow create: if (isStaff()
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'date', 'month', 'status', 'inAt', 'inTs', 'inLat', 'inLng', 'inAcc', 'inAddr', 'inFlags', 'inSrc', 'createdAt', 'updatedAt'])
+          && request.resource.data.uid == request.auth.uid
+          && id == request.auth.uid + '_' + request.resource.data.date
+          && isTodayIST(request.resource.data.date)
+          && request.resource.data.month == request.resource.data.date[0:7]
+          && request.resource.data.status == 'in'
+          && request.resource.data.inAt == request.time
+          && nearNow(request.resource.data.inTs)
+          && optCoord(request.resource.data, 'inLat', 'inLng', 'inAcc')
+          && optStr(request.resource.data, 'inAddr', 200) && optStr(request.resource.data, 'inSrc', 12)
+          && request.resource.data.name is string && request.resource.data.name.size() <= 80
+          && request.resource.data.inFlags is list && request.resource.data.inFlags.size() <= 10
+          && existsAfter(photoPath(id + '_in')))
+        // admin marks a day nobody checked in (leave, absent, present on field duty…) with a reason
+        || (isAdmin()
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'date', 'month', 'status', 'ovStatus', 'ovReason', 'ovBy', 'ovByName', 'ovAt', 'ovFrom', 'createdAt', 'updatedAt'])
+          && id == request.resource.data.uid + '_' + request.resource.data.date
+          && isDate(request.resource.data.date) && request.resource.data.month == request.resource.data.date[0:7]
+          && request.resource.data.status == 'none' && ovOk(request.resource.data));
+      allow update: if
+        // check-out: own, same day, once (status in -> out), selfie in the same batch; check-in data untouched
+        (isStaff() && resource.data.uid == request.auth.uid && resource.data.status == 'in'
+          && isTodayIST(resource.data.date)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'outAt', 'outTs', 'outLat', 'outLng', 'outAcc', 'outAddr', 'outFlags', 'outSrc', 'hours', 'updatedAt'])
+          && request.resource.data.status == 'out'
+          && request.resource.data.outAt == request.time
+          && nearNow(request.resource.data.outTs)
+          && optCoord(request.resource.data, 'outLat', 'outLng', 'outAcc')
+          && optStr(request.resource.data, 'outAddr', 200) && optStr(request.resource.data, 'outSrc', 12)
+          && request.resource.data.outFlags is list && request.resource.data.outFlags.size() <= 10
+          && request.resource.data.hours is number
+          && existsAfter(photoPath(id + '_out')))
+        // admin override: only the override/audit fields change; captured times, GPS and photos stay as evidence
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ovStatus', 'ovReason', 'ovBy', 'ovByName', 'ovAt', 'ovFrom', 'updatedAt'])
+          && ovOk(request.resource.data));
+      allow delete: if false;
+    }
+
+    // /attendancePhotos/{uid}_{YYYY-MM-DD}_{in|out}: one small JPEG (data URL) per check-in / check-out, write-once
+    match /attendancePhotos/{id} {
+      allow get: if isMgr() || (isActive() && resource.data.uid == request.auth.uid);
+      allow list: if false;
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly(['uid', 'date', 'kind', 'img', 'ts'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.kind in ['in', 'out']
+        && id == request.auth.uid + '_' + request.resource.data.date + '_' + request.resource.data.kind
+        && isTodayIST(request.resource.data.date)
+        && request.resource.data.img is string && request.resource.data.img.size() < 150000
+        && request.resource.data.img[0:23] == 'data:image/jpeg;base64,'
+        && nearNow(request.resource.data.ts);
+      allow update, delete: if false;
+    }
+
+    // /leaves/{id}: employee requests, admin approves / rejects
+    match /leaves/{id} {
+      allow get, list: if isMgr() || (isActive() && resource.data.uid == request.auth.uid);
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'from', 'to', 'days', 'type', 'reason', 'status', 'createdAt', 'updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && isDate(request.resource.data.from) && isDate(request.resource.data.to) && request.resource.data.from <= request.resource.data.to
+        && request.resource.data.days is number && request.resource.data.days > 0 && request.resource.data.days <= 31
+        && request.resource.data.type in ['CL', 'SL', 'LWP']
+        && request.resource.data.reason is string && request.resource.data.reason.size() <= 300
+        && request.resource.data.status == 'pending';
+      allow update: if
+        // employee withdraws their own pending request
+        (isActive() && resource.data.uid == request.auth.uid && resource.data.status == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && request.resource.data.status == 'cancelled')
+        // admin decides (or cancels an approved leave)
+        || (isAdmin() && resource.data.status in ['pending', 'approved']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paid', 'decidedBy', 'decidedByName', 'decidedAt', 'decisionNote', 'updatedAt'])
+          && request.resource.data.status in ['approved', 'rejected', 'cancelled']
+          && request.resource.data.decidedBy == request.auth.uid
+          && (!('paid' in request.resource.data) || request.resource.data.paid is bool)
+          && optStr(request.resource.data, 'decisionNote', 300));
+      allow delete: if false;
+    }
+
+    // /settings/attendance: office time, grace, week-off, holidays, pay basis (all staff read; admin writes)
+    match /settings/{id} {
+      allow get: if isActive();
+      allow list: if false;
+      allow create, update: if isAdmin() && id == 'attendance'
+        && request.resource.data.keys().hasOnly(['start', 'grace', 'halfHours', 'weekOff', 'holidays', 'basis', 'latePerHalf', 'updatedAt', 'updatedBy'])
+        && request.resource.data.start is string && request.resource.data.start.matches('^[0-2][0-9]:[0-5][0-9]$')
+        && request.resource.data.grace is number && request.resource.data.halfHours is number
+        && request.resource.data.weekOff is list && request.resource.data.holidays is list && request.resource.data.holidays.size() <= 60
+        && request.resource.data.basis in ['calendar', 'working']
+        && request.resource.data.latePerHalf is number;
+      allow delete: if false;
+    }
+
+    // /salary/{uid}: admin only (managers and employees never read salary settings)
+    match /salary/{uid} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['uid', 'monthly', 'joinDate', 'designation', 'updatedAt', 'updatedBy'])
+        && request.resource.data.uid == uid
+        && request.resource.data.monthly is number && request.resource.data.monthly >= 0
+        && (!('joinDate' in request.resource.data) || request.resource.data.joinDate == '' || isDate(request.resource.data.joinDate))
+        && optStr(request.resource.data, 'designation', 60);
+      allow delete: if false;
+    }
+
+    // /payroll/{uid}_{YYYY-MM}: admin writes drafts, finalizing locks it; employee reads own finalized payslips only
+    match /payroll/{id} {
+      allow get, list: if isAdmin() || (isActive() && resource.data.uid == request.auth.uid && resource.data.status == 'finalized');
+      allow create: if isAdmin() && validPay(id);
+      allow update: if isAdmin() && resource.data.status == 'draft' && validPay(id)
+        && request.resource.data.uid == resource.data.uid && request.resource.data.month == resource.data.month;
+      allow delete: if false;
+    }
+    function validPay(id) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['uid', 'name', 'designation', 'month', 'status', 'monthly', 'basis', 'daysInMonth', 'workDays', 'present', 'half', 'paidLeave',
+                               'unpaidLeave', 'absent', 'weekOffs', 'holidays', 'late', 'lateCut', 'notJoined', 'paidDays', 'perDay', 'earned', 'incentive', 'allowance',
+                               'advance', 'deduction', 'net', 'notes', 'createdAt', 'updatedAt', 'updatedBy', 'finalizedAt', 'finalizedBy'])
+        && id == d.uid + '_' + d.month && d.month is string && d.month.size() == 7
+        && d.status in ['draft', 'finalized']
+        && d.monthly is number && d.paidDays is number && d.earned is number && d.net is number
+        && d.incentive is number && d.allowance is number && d.advance is number && d.deduction is number
+        && optStr(d, 'notes', 500);
     }
 
     // everything else (including v1 /teams data) is closed

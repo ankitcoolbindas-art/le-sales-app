@@ -40,12 +40,13 @@ function navFor() {
   if (DB.isMgr()) return {
     side: [['Overview', [['dashboard', 'dash', 'Dashboard'], ['activity', 'activity', 'Live activity'], ['map', 'map', 'Map & live']]],
            ['Sales', [['pipeline', 'kanban', 'Pipeline'], ['calendar', 'cal', 'Follow-ups'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records']]],
-           ['Team', [['team', 'users', 'Team & targets']]],
-           ['My work', [['today', 'home', 'My day'], ['report', 'send', 'Daily report']]]],
-    bottom: [['dashboard', 'dash', 'Home'], ['activity', 'activity', 'Live'], ['pipeline', 'kanban', 'Pipeline'], ['team', 'users', 'Team'], ['more', 'more', 'More']]};
+           ['Team', [['team', 'users', 'Team & targets'], ['attendance', 'fp', 'Attendance'], ...(DB.isAdmin() ? [['payroll', 'wallet', 'Payroll']] : [])]],
+           ['My work', [['today', 'home', 'My day'], ['report', 'send', 'Daily report'], ...(DB.isAdmin() ? [] : [['myatt', 'calcheck', 'My attendance']])]]],
+    bottom: [['dashboard', 'dash', 'Home'], ['activity', 'activity', 'Live'], ['attendance', 'fp', 'Attendance'], ['team', 'users', 'Team'], ['more', 'more', 'More']]};
   return {side: [['Sales', [['today', 'home', 'Today'], ['quotes', 'quote', 'Quotations'], ['followups', 'clock', 'Follow-ups'], ['customers', 'store', 'Customers']]],
-                 ['Entries', [['list/visit', 'pin', 'Visits'], ['list/order', 'box', 'Orders'], ['list/payment', 'rupee', 'Collections'], ['report', 'send', 'Daily report']]]],
-    bottom: [['today', 'home', 'Today'], ['quotes', 'quote', 'Quotes'], ['followups', 'clock', 'Follow-ups'], ['customers', 'store', 'Customers'], ['more', 'more', 'More']]};
+                 ['Entries', [['list/visit', 'pin', 'Visits'], ['list/order', 'box', 'Orders'], ['list/payment', 'rupee', 'Collections'], ['report', 'send', 'Daily report']]],
+                 ['Me', [['myatt', 'calcheck', 'Attendance & leave'], ['payslips', 'wallet', 'My payslips']]]],
+    bottom: [['today', 'home', 'Today'], ['quotes', 'quote', 'Quotes'], ['followups', 'clock', 'Follow-ups'], ['myatt', 'calcheck', 'Attendance'], ['more', 'more', 'More']]};
 }
 function shell() {
   const n = navFor(), p = S.profile;
@@ -108,6 +109,7 @@ function draw() {
   const r = route(), [name, ...args] = r.split('/');
   const v = V[name] || V[DB.isMgr() ? 'dashboard' : 'today'];
   if (v.mgr && !DB.isMgr()) { location.hash = '#/today'; return; }
+  if (v.admin && !DB.isAdmin()) { location.hash = DB.isMgr() ? '#/dashboard' : '#/today'; return; }
   const view = $('#view'), focus = document.activeElement && document.activeElement.dataset.keep, sel = focus && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
   if (st.route !== r) { st.route = r; scrollTo(0, 0); }
   $('#ttl').textContent = typeof v.title === 'function' ? v.title(...args) : v.title;
@@ -324,7 +326,7 @@ V.today = {title: () => DB.isMgr() ? 'My day' : 'Today', render() {
   const m = LE.month(), mo = own.filter(r => r.date.startsWith(m)), t = S.targets.get(`${S.user.uid}_${m}`);
   const ms = LE.sum(mo.filter(r => r.kind === 'order'), 'value'), mc = LE.sum(mo.filter(r => r.kind === 'payment'), 'amount'), mv = mo.filter(r => r.kind === 'visit').length;
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
-  return `<div class="grid">
+  return `<div class="grid">${typeof ATT !== 'undefined' && !DB.isAdmin() ? ATT.todayCard() : ''}
    <div class="hero"><h1>${greet}, ${esc(S.profile.name.split(' ')[0])}</h1><p>${niceLong(d)}${S.profile.territory ? ' · ' + esc(S.profile.territory) : ''}</p>${S.profile.role === 'sales' ? `<p class="note" id="trk" style="margin-top:6px">${trackLine()}</p>` : ''}
     ${t ? `<div class="tgt"><div><b>${short(ms)}</b>Sales of ${short(t.sales)}${pctBar(ms, t.sales)}</div><div><b>${short(mc)}</b>Collected of ${short(t.collection)}${pctBar(mc, t.collection, 'g')}</div><div><b>${mv}</b>Visits of ${t.visits}${pctBar(mv, t.visits, 'c')}</div></div>` : `<p class="note">No target set for ${LE.monthName(m)} yet.</p>`}</div>
    <div class="qa"><button class="visit" data-new="visit"><span>${icon('pin')}</span>Check-in</button><button class="quote" data-new="quote"><span>${icon('quote')}</span>Quote</button><button class="order" data-new="order"><span>${icon('box')}</span>Order</button><button class="payment" data-new="payment"><span>${icon('rupee')}</span>Collect</button></div>
@@ -381,14 +383,14 @@ V.report = {title: 'Daily report', render() {
 }};
 V.more = {title: 'More', render() {
   const p = S.profile, items = DB.isMgr()
-    ? [['map', 'map', 'Map & live tracking'], ['calendar', 'cal', 'Follow-up calendar'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records & CSV'], ['today', 'home', 'My day'], ['report', 'send', 'My daily report']]
-    : [['list/visit', 'pin', 'My visits'], ['list/order', 'box', 'My orders'], ['list/payment', 'rupee', 'My collections'], ['report', 'send', 'Daily report']];
+    ? [['pipeline', 'kanban', 'Pipeline'], ['map', 'map', 'Map & live tracking'], ['attendance', 'fp', 'Attendance & leave'], ...(DB.isAdmin() ? [['payroll', 'wallet', 'Payroll & payslips']] : [['myatt', 'calcheck', 'My attendance'], ['payslips', 'wallet', 'My payslips']]), ['calendar', 'cal', 'Follow-up calendar'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records & CSV'], ['today', 'home', 'My day'], ['report', 'send', 'My daily report']]
+    : [['customers', 'store', 'Customers'], ['myatt', 'calcheck', 'My attendance & leave'], ['payslips', 'wallet', 'My payslips'], ['list/visit', 'pin', 'My visits'], ['list/order', 'box', 'My orders'], ['list/payment', 'rupee', 'My collections'], ['report', 'send', 'Daily report']];
   return `<div class="card" style="display:flex;gap:12px;align-items:center"><span class="avatar" style="width:46px;height:46px">${LE.initials(p.name)}</span><div><b>${esc(p.name)}</b><div class="note" style="margin:2px 0 0">${esc(p.email)} · <span class="tag ${p.role}">${p.role}</span></div></div></div>
    <div class="card pad0" style="margin-top:12px"><div class="list">${items.map(([r, ic, l]) => `<a class="li tap" href="#/${r}" style="color:var(--tx)"><span class="dot">${icon(ic)}</span><div class="b" style="align-self:center"><div class="t"><span>${l}</span></div></div></a>`).join('')}
     <div class="li tap" data-act="csvmine"><span class="dot">${icon('download')}</span><div class="b" style="align-self:center"><div class="t"><span>Export my entries (CSV)</span></div></div></div>
     <div class="li tap" data-act="account"><span class="dot">${icon('key')}</span><div class="b" style="align-self:center"><div class="t"><span>Change password</span></div></div></div>
     <div class="li tap" data-act="logout"><span class="dot" style="color:var(--red)">${icon('logout')}</span><div class="b" style="align-self:center"><div class="t"><span>Sign out</span></div></div></div></div></div>
-   <p class="note" style="text-align:center;margin-top:16px">LE Sales v2 · ${DB.pending().length} entr${DB.pending().length === 1 ? 'y' : 'ies'} waiting to sync${S.indexFallback ? ' · index fallback' : ''}</p>`;
+   <p class="note" style="text-align:center;margin-top:16px">LE Sales v3 · ${DB.pending().length} entr${DB.pending().length === 1 ? 'y' : 'ies'} waiting to sync${S.indexFallback ? ' · index fallback' : ''}</p>`;
 }};
 
 /* ---------- global events ---------- */

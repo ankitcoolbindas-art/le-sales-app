@@ -109,3 +109,22 @@ If the owner account ever has to be recreated (e.g. a new Firebase project), ope
 `https://ankitcoolbindas-art.github.io/le-sales-app/#/owner-setup`. It only works for `ankitcoolbindas@gmail.com`
 after email verification, and Firestore rules still decide who can become admin. If the account already exists,
 use **Forgot password?** on the normal sign-in screen instead.
+
+## v3 — Attendance & Payroll
+
+**Publish the new `firestore.rules` before anyone uses Attendance on the live site** (Firebase console → Firestore → Rules → paste the whole file → Publish). Until then check-in, leave and payroll writes are refused (the old rules close every unknown collection).
+
+No new indexes are needed: all new queries are equality-only or single-field (`attendance` by `date` / `month` / `uid`+`month`, `leaves` by `uid` / `status` / `to`, `payroll` by `month` / `uid`+`status`).
+
+New collections:
+- `attendance/{uid}_{YYYY-MM-DD}` — one doc per person-day. Employee creates it at check-in (today in IST by server clock, once) and updates it once at check-out. Admin corrections only touch `ovStatus/ovReason/ovBy/ovByName/ovAt/ovFrom`; captured times, GPS and photos stay as evidence.
+- `attendancePhotos/{uid}_{date}_{in|out}` — the selfie as a ~10–40 KB JPEG data URL (Spark plan has no Cloud Storage). Write-once; must be written in the same batch as the check-in/out.
+- `leaves/{id}` — employee requests, admin approves (paid/unpaid) / rejects / cancels.
+- `settings/attendance` — office start, grace, half-day hours, weekly off, holidays, pay basis, late rule.
+- `salary/{uid}` — admin only (managers and employees can't read).
+- `payroll/{uid}_{YYYY-MM}` — admin only; `finalized` docs are locked and readable by that employee only.
+
+Day rules: check-out with < half-day hours, or no check-out, = half-day. Late = check-in after start + grace. Days before the joining date are unpaid.
+Pay: calendar basis (default) = salary ÷ days in month × (present + ½ half-days + paid leave + week-offs + holidays); working basis = salary ÷ working days × (present + ½ half-days + paid leave on working days). Optional: every N late marks = ½ day cut.
+
+Tests: `tests/rules-v3.test.mjs` (77 rule checks) and `tests/e2e-v3-emulator.mjs` (mock data, screenshots `screens/v3-*.png`). Run from `/workspace/le-sales-tools` with the emulators started (`firebase emulators:start --only firestore,auth`).

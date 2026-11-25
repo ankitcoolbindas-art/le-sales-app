@@ -266,5 +266,12 @@
     await refresh();
   }
 
+  // v3 attendance: check-in starts the day's tracking, check-out ends it (same as Start day / End day)
+  Object.assign(window.LE_NATIVE, {
+    isActive: () => !!st.active,
+    startDay: async () => { try { if (!st.active && !afterHours()) await startDay(); } catch (e) { LE.toast(LE.errMsg(e)); } },
+    endDay: async reason => { try { const s = await E.status().catch(() => ({})); if (s.active) { await E.stop(reason || 'check-out'); LE.toast('Day ended · location sharing off'); } await refresh(); } catch (e) { LE.toast(LE.errMsg(e)); } }
+  });
+
   _on(what => { if (what === 'auth') refresh(); });
 })();

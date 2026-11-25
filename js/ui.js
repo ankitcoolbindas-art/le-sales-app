@@ -399,7 +399,7 @@ DB.on(what => {
     if (!st.seen) st.seen = new Set(ids);
     else ids.forEach(id => { if (!st.seen.has(id)) { st.seen.add(id); const r = S.records.get(id); if (r.ownerUid !== S.user.uid) { st.fresh.add(id); setTimeout(() => st.fresh.delete(id), 4000); } } });
   }
-  if (what === 'auth') { st.seen = null; st.hist = null; if (!S.user) { closeModal(); st.shellFor = ''; } }
+  if (what === 'auth') { st.seen = null; st.hist = null; if (!S.user) { closeModal(); st.shellFor = ''; st.authErr = st.authMsg = ''; st.authMode = 'login'; } }
   if (what === 'state') return syncPill();
   if ($('#modal') && what === 'data') return syncPill();   // don't redraw under an open form
   render();

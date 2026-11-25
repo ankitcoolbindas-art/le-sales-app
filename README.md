@@ -1,10 +1,20 @@
-# LE Sales — Lalit Enterprises salesperson tracker
+# LE Sales v2 — Lalit Enterprises sales force management
 
-A mobile-first offline PWA for 1–3 salespeople at Lalit Enterprises, Ranchi.
+A mobile-first PWA for the salespeople, plus a responsive admin dashboard for the owner. There is no server to
+run: the static site is on GitHub Pages and the data is in Firebase (Auth + Firestore).
 
-- Log visits with GPS, quotations with follow-ups, orders and payment collections.
-- Send a daily WhatsApp report to the owner.
-- Export to CSV, and back up or restore as JSON.
-- Optional real-time owner panel (`owner.html`) through Firebase Firestore.
+- **Salesperson:** GPS check-in visits, quotations, follow-ups, orders, collections, customers, monthly target
+  progress, and a WhatsApp daily report to +91 70042 21338.
+- **Admin / manager:** KPI dashboard, charts, leaderboard, targets vs achievement, pipeline kanban, follow-up
+  calendar, today's visits map, live activity feed, searchable records with CSV export, and team management.
+- **Security:** role-based Firestore rules in `firestore.rules`. Only the admin can add employees.
 
-There is no backend to run. Hosted on GitHub Pages. See [SETUP.md](SETUP.md).
+Setup steps are in [SETUP.md](SETUP.md).
+
+## Local development with the emulators
+
+```
+firebase emulators:start --only firestore,auth
+```
+
+Serve the folder and open `http://localhost:8765/?emu=1`. The app then uses the emulators instead of live Firebase.

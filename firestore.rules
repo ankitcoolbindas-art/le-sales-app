@@ -1,21 +1,89 @@
 rules_version = '2';
-// LE Sales — Firestore security rules.
-// Data lives at /teams/{teamCode}/records/{id}. The team code is a private string (min 8 chars)
-// typed into each phone and the owner panel; it is never stored in the public website code.
-// Every request must come from a signed-in (anonymous) Firebase user of this project.
+// LE Sales v2 — role-based Firestore security rules.
+// Roles live in /users/{uid}: role 'admin' | 'manager' | 'sales', active true/false.
+//  - Only an ACTIVE user with a users doc can read or write anything.
+//  - sales: read/write only their own records (ownerUid == their uid); read own targets + own profile.
+//  - manager: read everything (users, records, targets); write own records.
+//  - admin: everything a manager can, plus create/update users and targets.
+//  - Bootstrap: the owner email (verified) may create its own admin profile once.
+//  - Nothing can be hard-deleted.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /teams/{team}/records/{id} {
-      allow get, list: if request.auth != null && team.size() >= 8;
-      allow create, update: if request.auth != null && team.size() >= 8
-        && request.resource.data.id == id
-        && request.resource.data.kind in ['visit', 'quote', 'order', 'payment']
-        && request.resource.data.rep is string && request.resource.data.rep.size() <= 60
-        && request.resource.data.date is string && request.resource.data.date.size() == 10
-        && request.resource.data.size() <= 40;
-      allow delete: if false;   // the app soft-deletes (deleted: true) so history is kept
+
+    function signedIn() { return request.auth != null; }
+    function profPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && exists(profPath()); }
+    function prof() { return get(profPath()).data; }
+    function isActive() { return hasProfile() && prof().active == true; }
+    function isAdmin() { return isActive() && prof().role == 'admin'; }
+    function isMgr() { return isActive() && prof().role in ['admin', 'manager']; }
+    function isBootstrapOwner() {
+      return signedIn()
+        && request.auth.token.email == 'ankitcoolbindas@gmail.com'
+        && request.auth.token.email_verified == true;
     }
-    // nothing else is readable or writable; /teams itself cannot be listed
+
+    function validUser() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['name', 'phone', 'email', 'role', 'territory', 'active',
+                               'createdAt', 'createdBy', 'mustChangePassword', 'updatedAt'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.email is string && d.email.size() <= 120
+        && d.role in ['admin', 'manager', 'sales']
+        && d.active is bool;
+    }
+
+    match /users/{uid} {
+      allow get: if (isActive() && request.auth.uid == uid) || isMgr()
+                 || (signedIn() && request.auth.uid == uid);   // lets a deactivated user see why
+      allow list: if isMgr();
+      allow create: if (isAdmin() && validUser())
+        || (isBootstrapOwner() && request.auth.uid == uid && validUser()
+            && request.resource.data.role == 'admin' && request.resource.data.active == true
+            && request.resource.data.email == 'ankitcoolbindas@gmail.com');
+      allow update: if
+        // admin edits anyone, but cannot demote or deactivate themself
+        (isAdmin() && validUser()
+          && (uid != request.auth.uid || (request.resource.data.role == 'admin' && request.resource.data.active == true)))
+        // any active user can clear their own "must change password" flag
+        || (isActive() && uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword', 'updatedAt'])
+            && request.resource.data.mustChangePassword == false);
+      allow delete: if false;
+    }
+
+    function validRec() {
+      let d = request.resource.data;
+      return d.ownerUid is string
+        && d.kind in ['visit', 'quote', 'order', 'payment']
+        && d.date is string && d.date.size() == 10
+        && d.ts is number
+        && d.customer is string && d.customer.size() > 0 && d.customer.size() <= 120
+        && d.size() <= 45;
+    }
+
+    match /records/{id} {
+      allow get, list: if isActive() && (isMgr() || resource.data.ownerUid == request.auth.uid);
+      allow create: if isActive() && request.resource.data.ownerUid == request.auth.uid && validRec();
+      allow update: if isActive() && validRec()
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow delete: if false;   // the app soft-deletes (deleted: true)
+    }
+
+    // Monthly targets: id = {uid}_{YYYY-MM}
+    match /targets/{id} {
+      allow get, list: if isActive() && (isMgr() || resource.data.uid == request.auth.uid);
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['uid', 'month', 'sales', 'collection', 'visits', 'updatedAt', 'updatedBy'])
+        && request.resource.data.uid is string
+        && request.resource.data.month is string && request.resource.data.month.size() == 7
+        && request.resource.data.sales is number && request.resource.data.collection is number
+        && request.resource.data.visits is number;
+      allow delete: if false;
+    }
+
+    // everything else (including v1 /teams data) is closed
     match /{document=**} {
       allow read, write: if false;
     }

@@ -75,5 +75,30 @@ await t('signed-in user without profile denied records', assertFails(getDocs(que
 await t('anonymous denied records', assertFails(setDoc(doc(anon, 'records/a1'), rec('a1', 'anon1'))));
 await t('unauthenticated denied users', assertFails(getDocs(collection(unauth, 'users'))));
 await t('v1 /teams path closed', assertFails(setDoc(doc(anon, 'teams/TEST-LE-0000/records/x'), rec('x', 'anon1'))));
+
+// ---- live tracking ----
+const loc = (uid, extra = {}) => ({ownerUid: uid, ownerName: 'x', lat: 23.36, lng: 85.33, accuracy: 12, ts: Date.now(), date: '2026-11-25', source: 'web', reason: 'interval', ...extra});
+await t('sales writes own location', assertSucceeds(setDoc(doc(s1, 'locations/s1_a'), loc('s1'))));
+await t('sales writes own lastLocation', assertSucceeds(setDoc(doc(s1, 'lastLocation/s1'), loc('s1'))));
+await t('sales updates own lastLocation', assertSucceeds(setDoc(doc(s1, 'lastLocation/s1'), loc('s1', {lat: 23.37}))));
+await t('android source allowed', assertSucceeds(setDoc(doc(s1, 'locations/s1_b'), loc('s1', {source: 'android', battery: 0.8, charging: false, speed: 1.2, heading: 90, deviceId: 'abc'}))));
+await t('sales cannot write location as other', assertFails(setDoc(doc(s1, 'locations/s1_c'), loc('m1'))));
+await t('sales cannot write other lastLocation', assertFails(setDoc(doc(s1, 'lastLocation/m1'), loc('m1'))));
+await t('bad source rejected', assertFails(setDoc(doc(s1, 'locations/s1_d'), loc('s1', {source: 'ios'}))));
+await t('bad lat rejected', assertFails(setDoc(doc(s1, 'locations/s1_e'), loc('s1', {lat: 123}))));
+await t('extra field rejected', assertFails(setDoc(doc(s1, 'locations/s1_f'), loc('s1', {note: 'x'}))));
+await t('location is append-only (no update)', assertFails(setDoc(doc(s1, 'locations/s1_a'), loc('s1', {lat: 23.5}))));
+await t('location no delete', assertFails(deleteDoc(doc(s1, 'locations/s1_a'))));
+await t('lastLocation no delete', assertFails(deleteDoc(doc(s1, 'lastLocation/s1'))));
+await t('sales reads own locations (query)', assertSucceeds(getDocs(query(collection(s1, 'locations'), where('ownerUid', '==', 's1'), where('date', '==', '2026-11-25')))));
+await t('manager writes own location', assertSucceeds(setDoc(doc(m1, 'locations/m1_a'), loc('m1'))));
+await t('sales cannot read other locations', assertFails(getDocs(query(collection(s1, 'locations'), where('ownerUid', '==', 'm1')))));
+await t('sales cannot list all lastLocation', assertFails(getDocs(collection(s1, 'lastLocation'))));
+await t('sales cannot read other lastLocation', assertFails(getDoc(doc(s1, 'lastLocation/m1'))));
+await t('manager lists all lastLocation', assertSucceeds(getDocs(collection(m1, 'lastLocation'))));
+await t('admin reads route of s1', assertSucceeds(getDocs(query(collection(owner, 'locations'), where('ownerUid', '==', 's1'), where('date', '==', '2026-11-25')))));
+await t('deactivated s2 cannot write location', assertFails(setDoc(doc(s2, 'locations/s2_a'), loc('s2'))));
+await t('no-profile user cannot write location', assertFails(setDoc(doc(imposter, 'locations/imp_a'), loc('imp'))));
+await t('anonymous cannot read lastLocation', assertFails(getDocs(collection(anon, 'lastLocation'))));
 console.log(results.join('\n')); console.log(`\n${results.length - fail}/${results.length} passed`);
 await env.cleanup(); process.exit(fail ? 1 : 0);

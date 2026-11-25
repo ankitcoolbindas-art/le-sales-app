@@ -83,6 +83,34 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ---- Live tracking (web app now, Android/Capacitor later) ----
+    function validLoc(uid) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['ownerUid', 'ownerName', 'lat', 'lng', 'accuracy', 'ts', 'date', 'battery', 'charging',
+                               'speed', 'heading', 'source', 'reason', 'deviceId', 'appVersion', 'updatedAt'])
+        && d.ownerUid == uid
+        && d.lat is number && d.lat >= -90 && d.lat <= 90
+        && d.lng is number && d.lng >= -180 && d.lng <= 180
+        && d.accuracy is number && d.ts is number
+        && d.date is string && d.date.size() == 10
+        && d.source in ['web', 'android'];
+    }
+
+    // one document per position fix; append-only
+    match /locations/{id} {
+      allow get, list: if isMgr() || (isActive() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isActive() && validLoc(request.auth.uid);
+      allow update, delete: if false;
+    }
+
+    // latest position per person: /lastLocation/{uid}
+    match /lastLocation/{uid} {
+      allow get: if isMgr() || (isActive() && uid == request.auth.uid);
+      allow list: if isMgr();
+      allow create, update: if isActive() && uid == request.auth.uid && validLoc(uid);
+      allow delete: if false;
+    }
+
     // everything else (including v1 /teams data) is closed
     match /{document=**} {
       allow read, write: if false;

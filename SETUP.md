@@ -48,6 +48,39 @@ Other employee actions:
 - Set **Targets** per employee per month: sales ₹, collection ₹ and visits. Progress shows on the leaderboard
   and on each salesperson's Today screen.
 
+## 5. Live location tracking
+
+**Re-publish the rules after this update.** `firestore.rules` now has a `locations` / `lastLocation` section. Paste the whole file into Firebase console → Firestore → Rules → Publish. Until you do that, location writes are denied, and the Live map stays empty. Nothing else breaks. No new index is needed, because the route query uses only equality filters.
+
+- **When it records:** while a salesperson is signed in and the app is open. It writes a point every ~2 min, on movement of 150 m or more (at most one every 20 s), and at each customer check-in.
+- **What the salesperson sees:** the top bar shows "Location on / Locating… / Location off", and so does the Today card. The first time they sign in, a one-time notice explains the sharing. Tapping the pill shows the details and a Restart button.
+- **Owner/manager Map & live screen:**
+  - **Live:** each salesperson's current position, with an accuracy circle and the last-seen time. Green = seen under 5 min ago, amber = under 30 min, grey = older. Battery is shown where the browser reports it.
+  - **Route:** pick a person and a date. You see their tracked path as a dotted line, start/end markers, numbered customer check-ins, and the km travelled.
+  - **Visits:** check-in pins.
+- **Access rules:** salespeople can write only their own location and read only their own. Admin and managers read everyone's. Location points can't be edited or deleted. Only `lastLocation/{uid}` is overwritten with each new point.
+- **Web limitation:** browsers pause GPS when the app is closed, the phone is locked, or the tab is in the background. For all-day background tracking, use the Android app. Both write the same documents.
+
+### Location document (shared by web and the coming Android/Capacitor app)
+`locations/{uid}_{ts base36}`, which is append-only, and `lastLocation/{uid}`, which holds the latest point. The fields are:
+
+| field | type | notes |
+|---|---|---|
+| ownerUid | string | must equal the signed-in user's uid (required) |
+| ownerName | string | display name |
+| lat, lng | number | required, range-checked |
+| accuracy | number | metres (required) |
+| ts | number | ms since epoch, GPS fix time (required) |
+| date | string | `YYYY-MM-DD` local date, used by route replay (required) |
+| source | string | `'web'` or `'android'` (required) |
+| reason | string | `start` / `interval` / `move` / `checkin` (Android may add `background`) |
+| battery, charging | number 0–1, bool | optional |
+| speed, heading | number | optional (m/s, degrees) |
+| deviceId, appVersion | string | optional |
+| updatedAt | number | optional |
+
+The rules reject any other field. The Android app should sign in with the same Firebase Email/Password account and write the same shape with `source:'android'`. It can batch points it saved while offline, because each point has its own id.
+
 ## Roles
 
 | Role | Can do |

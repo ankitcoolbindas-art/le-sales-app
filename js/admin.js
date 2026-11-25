@@ -49,8 +49,9 @@ document.addEventListener('click', e => {
 const exportCSV = (recs, name) => LE.download(`le-sales-${name}-${today()}.csv`, LE.toCSV(recs.slice().sort((a, b) => a.ts - b.ts)), 'text/csv;charset=utf-8');
 
 /* ---------- map (one persistent Leaflet instance moved between views) ---------- */
+const pin = (c, label, ring) => L.divIcon({className: '', html: `<div class="pinm" style="background:${c}${ring ? ';box-shadow:0 0 0 3px ' + ring : ''}"><b>${label}</b></div>`, iconSize: [26, 26], iconAnchor: [13, 26], popupAnchor: [0, -24]});
 const MapC = {el: null, map: null, layer: null, sig: '',
-  async mount(slot, pts) {
+  async mount(slot, draw, sig) {
     try { await loadLeaf(); } catch { slot.innerHTML = '<div class="empty" style="margin:12px">Map needs internet to load.</div>'; return; }
     if (!this.el) {
       this.el = document.createElement('div'); this.el.style.cssText = 'width:100%;height:100%';
@@ -60,18 +61,24 @@ const MapC = {el: null, map: null, layer: null, sig: '',
     }
     slot.innerHTML = ''; slot.appendChild(this.el); this.map.invalidateSize();
     this.layer.clearLayers();
-    const reps = {};
-    pts.sort((a, b) => a.ts - b.ts).forEach(r => (reps[r.ownerUid] = reps[r.ownerUid] || []).push(r));
-    Object.entries(reps).forEach(([uid, a]) => {
-      const c = colorOf(uid);
-      if (a.length > 1) L.polyline(a.map(r => [r.lat, r.lng]), {color: c, weight: 2.5, opacity: .7, dashArray: '6 6'}).addTo(this.layer);
-      a.forEach((r, i) => L.marker([r.lat, r.lng], {icon: L.divIcon({className: '', html: `<div class="pinm" style="background:${c}"><b>${i + 1}</b></div>`, iconSize: [26, 26], iconAnchor: [13, 26]})})
-        .bindPopup(`<b>${esc(r.customer)}</b><br>${esc(r.ownerName || '')} · ${time(r.ts)}<br>${esc(r.requirement || r.ctype || '')}<br><a href="${LE.map(r.lat, r.lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`).addTo(this.layer));
-    });
-    const sig = pts.map(r => r.id).join();
-    if (sig !== this.sig) { this.sig = sig; if (pts.length) this.map.fitBounds(L.latLngBounds(pts.map(r => [r.lat, r.lng])).pad(0.25), {maxZoom: 15}); }
+    const pts = draw(this.layer) || [];
+    if (sig !== this.sig) { this.sig = sig; if (pts.length) this.map.fitBounds(L.latLngBounds(pts).pad(0.25), {maxZoom: 15}); }
     setTimeout(() => this.map.invalidateSize(), 60);
   }};
+function visitsLayer(pts) {
+  return layer => {
+    const reps = {};
+    pts.slice().sort((a, b) => a.ts - b.ts).forEach(r => (reps[r.ownerUid] = reps[r.ownerUid] || []).push(r));
+    Object.entries(reps).forEach(([uid, a]) => {
+      const c = colorOf(uid);
+      if (a.length > 1) L.polyline(a.map(r => [r.lat, r.lng]), {color: c, weight: 2.5, opacity: .7, dashArray: '6 6'}).addTo(layer);
+      a.forEach((r, i) => L.marker([r.lat, r.lng], {icon: pin(c, i + 1)}).bindPopup(`<b>${esc(r.customer)}</b><br>${esc(r.ownerName || '')} · ${time(r.ts)}<br>${esc(r.requirement || r.ctype || '')}<br><a href="${LE.map(r.lat, r.lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`).addTo(layer));
+    });
+    return pts.map(r => [r.lat, r.lng]);
+  };
+}
+const fresh = ts => { const m = (Date.now() - ts) / 60000; return m < 5 ? ['#3ddc97', 'live', 'Live'] : m < 30 ? ['#ffc53d', 'recent', 'Recent'] : ['#77829a', 'old', 'Offline']; };
+const kmOf = a => { let d = 0; for (let i = 1; i < a.length; i++) { const p = a[i - 1], q = a[i], R = 6371, r = x => x * Math.PI / 180, h = Math.sin(r(q.lat - p.lat) / 2) ** 2 + Math.cos(r(p.lat)) * Math.cos(r(q.lat)) * Math.sin(r(q.lng - p.lng) / 2) ** 2; d += 2 * R * Math.asin(Math.sqrt(h)); } return d; };
 const legend = pts => { const u = [...new Set(pts.map(r => r.ownerUid))]; return u.length ? `<div class="legend">${u.map(id => `<span><i style="background:${colorOf(id)}"></i>${esc((S.users.get(id) || {}).name || '')} · ${pts.filter(r => r.ownerUid === id).length}</span>`).join('')}</div>` : ''; };
 
 /* ---------- charts ---------- */
@@ -132,7 +139,7 @@ V.dashboard = {mgr: true, title: 'Dashboard', render() {
     ['cPipe', {type: 'doughnut', data: {labels: ['Hot', 'Warm', 'Cold', 'Won', 'Lost'], datasets: [{data: pv, backgroundColor: ['#ff6b6b', '#ffc53d', '#6aa8ff', '#3ddc97', '#4b5466'], borderColor: '#111620', borderWidth: 3}]},
       options: {cutout: '66%', plugins: {legend: {position: 'right', labels: {boxWidth: 10, boxHeight: 10, generateLabels: ch => ch.data.labels.map((l, i) => ({text: `${l}  ${short(pv[i])}`, fillStyle: ch.data.datasets[0].backgroundColor[i], strokeStyle: 'transparent', index: i, fontColor: '#a3adbf'}))}}, tooltip: {callbacks: {label: c => c.label + ': ' + money(c.raw)}}}}}],
   ]);
-  MapC.mount($('#mapslot'), byRep(all().filter(r => r.kind === 'visit' && r.date === today() && r.lat != null)));
+  { const vp = byRep(all().filter(r => r.kind === 'visit' && r.date === today() && r.lat != null)); MapC.mount($('#mapslot'), visitsLayer(vp), 'dash' + vp.map(r => r.id).join()); }
   $('#dcsv').onclick = () => exportCSV(byRep(all().filter(r => inRange(r, range()))), 'dashboard');
 }};
 
@@ -145,13 +152,73 @@ V.activity = {mgr: true, title: 'Live activity', render() {
    ${groups.map(g => `<div class="card-h" style="margin:14px 2px 8px"><h3>${g.d === today() ? 'Today' : niceLong(g.d)}</h3><span class="sub">${g.items.length}</span></div>${listCard(g.items.map(r => li(r, {who: true})), '')}`).join('') || '<div class="empty">No activity yet</div>'}`;
 }};
 
-/* ---------- map ---------- */
-V.map = {mgr: true, title: 'Visits map', render() {
-  const d = st.q.md || today(), pts = byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat != null)), nog = byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat == null));
+/* ---------- map: visits / live positions / route replay ---------- */
+let routeCache = {key: '', pts: null, at: 0};
+// default route person: explicit pick, else whoever reported a location most recently, else first salesperson
+function routeUid(sales) {
+  if (st.q.ru && S.users.has(st.q.ru)) return st.q.ru;
+  const live = sales.filter(u => S.lastLoc.has(u.uid)).sort((a, b) => S.lastLoc.get(b.uid).ts - S.lastLoc.get(a.uid).ts);
+  return ((live[0] || sales[0]) || {}).uid;
+}
+V.map = {mgr: true, title: 'Map', render() {
+  const mode = st.q.mm || 'live', d = st.q.md || today();
+  const modes = seg('mm', {live: 'Live', route: 'Route', visits: 'Visits'}, 'live');
+  const dateIn = `<input type="date" data-sel="md" value="${d}" max="${today()}" style="width:auto;min-height:38px;margin:0;font-size:14px;padding:6px 10px">`;
+  if (mode === 'live') {
+    const sales = people().filter(u => u.active && u.role === 'sales');
+    const rows = sales.map(u => ({u, l: S.lastLoc.get(u.uid)})).sort((a, b) => ((b.l || {}).ts || 0) - ((a.l || {}).ts || 0));
+    const nLive = rows.filter(x => x.l && fresh(x.l.ts)[1] === 'live').length;
+    return `<div class="page-h"><div><h1>Live locations</h1><p>${nLive} of ${sales.length} salespeople live now · updates every ~2 min while their app is open</p></div><div class="toolbar">${modes}</div></div>
+     <div class="dash two"><div class="card"><div class="mapbox tall" id="mapslot"></div>
+      <div class="legend"><span><i style="background:#3ddc97"></i>seen &lt; 5 min</span><span><i style="background:#ffc53d"></i>&lt; 30 min</span><span><i style="background:#77829a"></i>older</span></div></div>
+      <div class="card pad0"><div class="card-h" style="padding:14px 16px 0"><h3>Salespeople</h3><span class="sub">last seen</span></div><div class="list">
+      ${rows.map(({u, l}) => { const f = l ? fresh(l.ts) : ['#77829a', 'old', 'No location yet'];
+        return `<div class="li"><span class="avatar sm" style="box-shadow:0 0 0 2px ${f[0]};color:${colorOf(u.uid)}">${LE.initials(u.name)}</span><div class="b"><div class="t"><span>${esc(u.name)}</span><span class="tag" style="color:${f[0]};background:rgba(255,255,255,.06)">${l ? f[2] : '—'}</span></div>
+         <div class="m">${l ? `<span>${LE.ago(l.ts)} · ${time(l.ts)}</span><span>· ±${l.accuracy}m</span>${l.battery != null ? `<span>· 🔋${Math.round(l.battery * 100)}%${l.charging ? '⚡' : ''}</span>` : ''}<span>· ${esc(l.source)}</span><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">map</a><a href="#" data-route="${u.uid}">route</a>` : '<span>Not shared yet (app not opened or location off)</span>'}</div></div></div>`; }).join('') || '<div style="padding:14px"><div class="empty">No active salespeople</div></div>'}</div></div></div>`;
+  }
+  if (mode === 'route') {
+    const sales = people().filter(u => u.role === 'sales'), uid = routeUid(sales);
+    const key = uid + '|' + d, pts = routeCache.key === key ? routeCache.pts : null;
+    const vis = all().filter(r => r.kind === 'visit' && r.ownerUid === uid && r.date === d && r.lat != null).sort((a, b) => a.ts - b.ts);
+    const sel = `<select data-sel="ru" style="width:auto;min-height:38px;margin:0">${sales.map(u => `<option value="${u.uid}" ${u.uid === uid ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>`;
+    const info = !uid ? 'No salespeople yet' : !pts ? 'Loading route…' : pts.length ? `${pts.length} points · ${kmOf(pts).toFixed(1)} km · ${time(pts[0].ts)} – ${time(pts[pts.length - 1].ts)} · ${vis.length} check-in(s)` : `No tracked points for this day · ${vis.length} check-in(s)`;
+    return `<div class="page-h"><div><h1>Route replay</h1><p>${info}</p></div><div class="toolbar">${modes}${sel}${dateIn}<button class="btn sm" id="rref">Refresh</button></div></div>
+     <div class="card"><div class="mapbox tall" id="mapslot"></div><div class="legend"><span><i style="background:#3ddc97"></i>start</span><span><i style="background:#ff6b6b"></i>end / last</span><span><i style="background:${uid ? colorOf(uid) : '#fff'}"></i>numbered = customer check-ins</span><span>dotted = tracked path</span></div></div>`;
+  }
+  const pts = byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat != null)), nog = byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat == null));
   return `<div class="page-h"><div><h1>Visits map</h1><p>${niceLong(d)} · ${pts.length} GPS check-in(s)${nog.length ? ` · ${nog.length} without GPS` : ''} · numbered in visit order</p></div>
-    <div class="toolbar"><input type="date" data-sel="md" value="${d}" max="${today()}" style="width:auto;min-height:38px;margin:0;font-size:14px;padding:6px 10px">${repSel()}</div></div>
+    <div class="toolbar">${modes}${dateIn}${repSel()}</div></div>
    <div class="card"><div class="mapbox tall" id="mapslot"></div>${legend(pts)}</div>`;
-}, after() { const d = st.q.md || today(); MapC.mount($('#mapslot'), byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat != null))); }};
+}, after(el) {
+  const mode = st.q.mm || 'live', d = st.q.md || today(), slot = $('#mapslot');
+  $$('[data-route]', el).forEach(a => a.onclick = e => { e.preventDefault(); st.q.mm = 'route'; st.q.ru = a.dataset.route; st.q.md = today(); render(); });
+  if (mode === 'live') {
+    const rows = people().filter(u => u.active && u.role === 'sales').map(u => ({u, l: S.lastLoc.get(u.uid)})).filter(x => x.l);
+    MapC.mount(slot, layer => { rows.forEach(({u, l}) => { const f = fresh(l.ts);
+      if (l.accuracy > 30 && l.accuracy < 2000) L.circle([l.lat, l.lng], {radius: l.accuracy, color: f[0], weight: 1, opacity: .4, fillOpacity: .06}).addTo(layer);
+      L.marker([l.lat, l.lng], {icon: pin(colorOf(u.uid), LE.initials(u.name), f[0])}).bindPopup(`<b>${esc(u.name)}</b><br>${f[2]} · ${LE.ago(l.ts)} (${time(l.ts)})<br>±${l.accuracy} m${l.battery != null ? ' · battery ' + Math.round(l.battery * 100) + '%' : ''}<br><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`).addTo(layer); });
+      return rows.map(x => [x.l.lat, x.l.lng]); }, 'live' + rows.map(x => x.u.uid).join());
+    clearTimeout(V.map._t); V.map._t = setTimeout(() => { if ((location.hash.split('/')[1] || '') === 'map' && (st.q.mm || 'live') === 'live' && !document.getElementById('modal')) render(); }, 30000);
+    return;
+  }
+  if (mode === 'route') {
+    const sales = people().filter(u => u.role === 'sales'), uid = routeUid(sales); if (!uid) return;
+    const key = uid + '|' + d;
+    const load = () => DB.routeFor(uid, d).then(pts => { routeCache = {key, pts, at: Date.now()}; render(); }).catch(e => { routeCache = {key, pts: [], at: Date.now()}; LE.toast(LE.errMsg(e)); render(); });
+    $('#rref').onclick = load;
+    if (routeCache.key !== key) { load(); }
+    const pts = routeCache.key === key && routeCache.pts || [], vis = all().filter(r => r.kind === 'visit' && r.ownerUid === uid && r.date === d && r.lat != null).sort((a, b) => a.ts - b.ts), c = colorOf(uid);
+    MapC.mount(slot, layer => {
+      if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lng]), {color: c, weight: 3, opacity: .8, dashArray: '4 6'}).addTo(layer);
+      pts.forEach((p, i) => { if (i && i < pts.length - 1) L.circleMarker([p.lat, p.lng], {radius: 3, color: c, weight: 1, fillOpacity: .9}).bindTooltip(time(p.ts)).addTo(layer); });
+      if (pts.length) { L.marker([pts[0].lat, pts[0].lng], {icon: pin('#3ddc97', 'S')}).bindPopup('Start ' + time(pts[0].ts)).addTo(layer); const z = pts[pts.length - 1]; L.marker([z.lat, z.lng], {icon: pin('#ff6b6b', 'E')}).bindPopup((d === today() ? 'Last seen ' : 'End ') + time(z.ts)).addTo(layer); }
+      vis.forEach((r, i) => L.marker([r.lat, r.lng], {icon: pin(c, i + 1)}).bindPopup(`<b>${esc(r.customer)}</b><br>Check-in ${time(r.ts)}<br>${esc(r.requirement || '')}`).addTo(layer));
+      return [...pts.map(p => [p.lat, p.lng]), ...vis.map(r => [r.lat, r.lng])];
+    }, 'route' + key + pts.length);
+    return;
+  }
+  const pts = byRep(all().filter(r => r.kind === 'visit' && r.date === d && r.lat != null)); MapC.mount(slot, visitsLayer(pts), 'visits' + d + pts.map(r => r.id).join());
+}};
 
 /* ---------- pipeline kanban ---------- */
 V.pipeline = {mgr: true, title: 'Pipeline', render() {

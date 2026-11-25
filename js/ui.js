@@ -38,7 +38,7 @@ const userName = uid => (S.users.get(uid) || {}).name || '';
 /* ---------- shell ---------- */
 function navFor() {
   if (DB.isMgr()) return {
-    side: [['Overview', [['dashboard', 'dash', 'Dashboard'], ['activity', 'activity', 'Live activity'], ['map', 'map', 'Visits map']]],
+    side: [['Overview', [['dashboard', 'dash', 'Dashboard'], ['activity', 'activity', 'Live activity'], ['map', 'map', 'Map & live']]],
            ['Sales', [['pipeline', 'kanban', 'Pipeline'], ['calendar', 'cal', 'Follow-ups'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records']]],
            ['Team', [['team', 'users', 'Team & targets']]],
            ['My work', [['today', 'home', 'My day'], ['report', 'send', 'Daily report']]]],
@@ -54,7 +54,7 @@ function shell() {
       <nav>${n.side.map(([g, items]) => `<div class="grp">${g}</div>` + items.map(([r, ic, l]) => `<a href="#/${r}" data-r="${r}">${icon(ic)}<span>${l}</span>${r === 'followups' || r === 'calendar' ? '<span class="badge" data-due hidden></span>' : ''}</a>`).join('')).join('')}</nav>
       <div class="me"><span class="avatar">${LE.initials(p.name)}</span><div><b>${esc(p.name)}</b><small>${esc(p.email)}</small></div><button class="icon-btn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
     </aside>
-    <div class="mainc"><header class="topbar">${brand()}<div class="top-title" id="ttl"></div><span class="sync" id="sync"><i></i><span></span></span><span class="avatar" data-act="account" title="My account">${LE.initials(p.name)}</span></header>
+    <div class="mainc"><header class="topbar">${brand()}<div class="top-title" id="ttl"></div>${p.role === 'sales' ? '<span class="sync" id="loc" data-act="locinfo" style="cursor:pointer"><i></i><span></span></span>' : ''}<span class="sync" id="sync"><i></i><span></span></span><span class="avatar" data-act="account" title="My account">${LE.initials(p.name)}</span></header>
       <main class="view" id="view"></main></div></div>
     <nav class="bnav">${n.bottom.map(([r, ic, l]) => `<a href="#/${r}" data-r="${r}">${icon(ic)}<span>${l}</span>${r === 'followups' ? '<span class="badge" data-due hidden></span>' : ''}</a>`).join('')}</nav>
     <button class="fab" data-act="new" aria-label="New entry">${icon('plus')}</button>`;
@@ -68,6 +68,19 @@ function syncPill() {
   el.className = 'sync ' + c; el.lastElementChild.textContent = t;
   const due = dueQuotes(!DB.isMgr()).filter(q => q.followUp <= today()).length;
   $$('[data-due]').forEach(b => { b.hidden = !due; b.textContent = due; });
+}
+
+function locPill() {
+  const el = $('#loc'); if (!el) return;
+  const t = S.track, [c, txt] = t.state === 'on' ? ['live', 'Location on'] : t.state === 'starting' ? ['wait', 'Locating…'] : t.state === 'off' ? ['', 'Location off'] : ['bad', 'Location off'];
+  el.className = 'sync ' + c; el.lastElementChild.textContent = txt; el.title = t.err || 'Your location is shared with the owner while this app is open';
+  const h = $('#trk'); if (h) h.innerHTML = trackLine();
+}
+function trackLine() {
+  const t = S.track;
+  if (t.state === 'on') return `<span style="color:var(--green)">●</span> Location sharing on · ${t.lastWrite ? 'last sent ' + LE.ago(t.lastWrite) : 'sending…'} · ${t.count} update(s) this session`;
+  if (t.state === 'starting') return '<span style="color:var(--amber)">●</span> Starting location sharing…';
+  return `<span style="color:var(--red)">●</span> Location sharing is off${t.err ? ' (' + esc(t.err) + ')' : ''} — <a href="#" data-act="locretry">turn on</a>`;
 }
 
 /* ---------- router ---------- */
@@ -102,7 +115,7 @@ function draw() {
   $$('[data-r]').forEach(a => a.classList.toggle('on', a.dataset.r === r || (name === 'customer' && a.dataset.r === 'customers') || (name === 'list' && a.dataset.r === 'more' && !$('.side').offsetParent)));
   v.after && v.after(view, ...args);
   if (focus) { const el = $(`[data-keep="${focus}"]`); if (el) { el.focus(); try { el.setSelectionRange(...sel); } catch {} } }
-  syncPill();
+  syncPill(); locPill();
 }
 addEventListener('hashchange', () => render());
 
@@ -247,6 +260,7 @@ function submit(f, pre) {
   if (fd.value !== undefined) fd.value = +fd.value || 0; if (fd.amount !== undefined) fd.amount = +fd.amount || 0;
   if (fd.status) fd.status = fd.status.toLowerCase();
   const r = DB.save({...pre, kind, ...fd});
+  if (kind === 'visit' && !pre.id && f._gps) DB.Track.checkin(f._gps);
   closeModal(); LE.toast(`${LE.KINDS[kind]} saved`);
   if (kind === 'quote' && r.status === 'won' && pre.status !== 'won' && confirm('Quotation won 🎉 Add it as an order now?')) form('order', {customer: r.customer, value: r.value, items: r.note});
 }
@@ -307,7 +321,7 @@ V.today = {title: () => DB.isMgr() ? 'My day' : 'Today', render() {
   const ms = LE.sum(mo.filter(r => r.kind === 'order'), 'value'), mc = LE.sum(mo.filter(r => r.kind === 'payment'), 'amount'), mv = mo.filter(r => r.kind === 'visit').length;
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
   return `<div class="grid">
-   <div class="hero"><h1>${greet}, ${esc(S.profile.name.split(' ')[0])}</h1><p>${niceLong(d)}${S.profile.territory ? ' · ' + esc(S.profile.territory) : ''}</p>
+   <div class="hero"><h1>${greet}, ${esc(S.profile.name.split(' ')[0])}</h1><p>${niceLong(d)}${S.profile.territory ? ' · ' + esc(S.profile.territory) : ''}</p>${S.profile.role === 'sales' ? `<p class="note" id="trk" style="margin-top:6px">${trackLine()}</p>` : ''}
     ${t ? `<div class="tgt"><div><b>${short(ms)}</b>Sales of ${short(t.sales)}${pctBar(ms, t.sales)}</div><div><b>${short(mc)}</b>Collected of ${short(t.collection)}${pctBar(mc, t.collection, 'g')}</div><div><b>${mv}</b>Visits of ${t.visits}${pctBar(mv, t.visits, 'c')}</div></div>` : `<p class="note">No target set for ${LE.monthName(m)} yet.</p>`}</div>
    <div class="qa"><button class="visit" data-new="visit"><span>${icon('pin')}</span>Check-in</button><button class="quote" data-new="quote"><span>${icon('quote')}</span>Quote</button><button class="order" data-new="order"><span>${icon('box')}</span>Order</button><button class="payment" data-new="payment"><span>${icon('rupee')}</span>Collect</button></div>
    <div class="kpis k4">${kpi('cyan', 'pin', K('visit').length, 'Visits today')}${kpi('amber', 'quote', short(LE.sum(K('quote'), 'value')), `${K('quote').length} quotation(s)`)}${kpi('green', 'box', short(LE.sum(K('order'), 'value')), `${K('order').length} order(s)`)}${kpi('violet', 'rupee', short(LE.sum(K('payment'), 'amount')), `${K('payment').length} collection(s)`)}</div>
@@ -363,7 +377,7 @@ V.report = {title: 'Daily report', render() {
 }};
 V.more = {title: 'More', render() {
   const p = S.profile, items = DB.isMgr()
-    ? [['map', 'map', 'Visits map'], ['calendar', 'cal', 'Follow-up calendar'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records & CSV'], ['today', 'home', 'My day'], ['report', 'send', 'My daily report']]
+    ? [['map', 'map', 'Map & live tracking'], ['calendar', 'cal', 'Follow-up calendar'], ['customers', 'store', 'Customers'], ['records', 'table', 'All records & CSV'], ['today', 'home', 'My day'], ['report', 'send', 'My daily report']]
     : [['list/visit', 'pin', 'My visits'], ['list/order', 'box', 'My orders'], ['list/payment', 'rupee', 'My collections'], ['report', 'send', 'Daily report']];
   return `<div class="card" style="display:flex;gap:12px;align-items:center"><span class="avatar" style="width:46px;height:46px">${LE.initials(p.name)}</span><div><b>${esc(p.name)}</b><div class="note" style="margin:2px 0 0">${esc(p.email)} · <span class="tag ${p.role}">${p.role}</span></div></div></div>
    <div class="card pad0" style="margin-top:12px"><div class="list">${items.map(([r, ic, l]) => `<a class="li tap" href="#/${r}" style="color:var(--tx)"><span class="dot">${icon(ic)}</span><div class="b" style="align-self:center"><div class="t"><span>${l}</span></div></div></a>`).join('')}
@@ -382,6 +396,8 @@ document.addEventListener('click', e => {
   else if (t.dataset.cust) location.hash = '#/customer/' + encodeURIComponent(t.dataset.cust);
   else if (t.dataset.qs) { st.q.qs = t.dataset.qs; render(); }
   else ({
+    locinfo: () => modal(`${mh('Location sharing')}<p class="sub" style="color:var(--mut)">While you are signed in and this app is open, your location is sent to Lalit Enterprises every ~2 minutes and when you move, so the owner can see where the team is and plan visits. It stops when you sign out or close the app.</p><div class="ok" id="trkm">${trackLine()}</div><div class="modal-f"><button class="btn" data-close>Close</button><button class="btn pri" data-act="locretry">Restart location</button></div>`),
+    locretry: () => { DB.Track.retry(); LE.toast('Asking for location…'); },
     new: newMenu, logout: () => { if (confirm('Sign out?')) DB.logout(); },
     account: () => changePwScreen(false),
     report: () => { const tx = reportText(); modal(`${mh('Daily report')}<p class="note">Check it, then tap Send. WhatsApp opens with this ready for the owner.</p><pre class="report" id="repText">${esc(tx)}</pre><div class="modal-f"><button class="btn" data-act="copyrep">Copy</button><a class="btn wa" id="waSend" href="${waLink(tx)}" target="_blank" rel="noopener">${icon('send')}Send on WhatsApp</a></div>`); },
@@ -401,6 +417,12 @@ DB.on(what => {
   }
   if (what === 'auth') { st.seen = null; st.hist = null; if (!S.user) { closeModal(); st.shellFor = ''; st.authErr = st.authMsg = ''; st.authMode = 'login'; } }
   if (what === 'state') return syncPill();
+  if (what === 'track') { locPill(); const m = $('#trkm'); if (m) m.innerHTML = trackLine(); return; }
+  if (what === 'loc') { const r = route(); if (!$('#modal') && (r.startsWith('map') || r === 'dashboard')) render(); return; }
+  if (!document.querySelector('.modal') && S.user && S.profile && S.profile.active && S.profile.role === 'sales' && !localStorage.getItem('le2_locnotice_' + S.user.uid) && !S.profile.mustChangePassword) {
+    localStorage.setItem('le2_locnotice_' + S.user.uid, '1');
+    setTimeout(() => modal(`${mh('Location sharing is on')}<p class="sub" style="color:var(--mut)">Lalit Enterprises uses your location while this app is open: every ~2 minutes, when you move, and at each customer check-in. The owner and managers can see it on the live map. Please allow location when your phone asks.</p><div class="modal-f"><button class="btn pri" data-close>OK, understood</button></div>`), 600);
+  }
   if ($('#modal') && what === 'data') return syncPill();   // don't redraw under an open form
   render();
 });

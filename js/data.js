@@ -3,7 +3,7 @@ const DB = (() => {
   const cfg = window.LE_FIREBASE;
   const EMU = /[?&]emu=1/.test(location.search) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   let auth, db, unsubs = [], flushing = false, again = false;
-  const S = {profileErr: false, user: null, profile: null, records: new Map(), openQ: new Map(), users: new Map(), targets: new Map(), state: 'connecting', loaded: false, indexFallback: false};
+  const S = {lastLoc: new Map(), track: {state: 'off', lastWrite: 0, count: 0, err: ''}, profileErr: false, user: null, profile: null, records: new Map(), openQ: new Map(), users: new Map(), targets: new Map(), state: 'connecting', loaded: false, indexFallback: false};
   const subs = new Set();
   const emit = (what) => subs.forEach(f => f(what));
   const lsKey = k => `le2_${k}_${S.user ? S.user.uid : 'x'}`;
@@ -26,8 +26,8 @@ const DB = (() => {
   function setState(s) { S.state = navigator.onLine ? s : 'offline'; emit('state'); }
 
   async function onAuth(user) {
-    unsubs.forEach(u => u()); unsubs = [];
-    S.user = user; S.profile = null; S.records = new Map(); S.openQ = new Map(); S.users = new Map(); S.targets = new Map(); S.loaded = false;
+    unsubs.forEach(u => u()); unsubs = []; Track.stop();
+    S.user = user; S.lastLoc = new Map(); S.profile = null; S.records = new Map(); S.openQ = new Map(); S.users = new Map(); S.targets = new Map(); S.loaded = false;
     if (!user) { emit('auth'); return; }
     // local own records first (offline start)
     lsGet('recs', []).forEach(r => S.records.set(r.id, r));
@@ -48,11 +48,12 @@ const DB = (() => {
   function start() {
     const uid = S.user.uid, from = LE.addDays(LE.today(), -(isMgr() ? MGR_DAYS : WINDOW_DAYS)), recs = db.collection('records');
     // live profile (deactivation takes effect immediately)
-    unsubs.push(db.collection('users').doc(uid).onSnapshot(s => { if (!s.exists) return; const p = s.data(); const was = S.profile; S.profile = p; lsSet('profile', p); if (!was || was.active !== p.active || was.role !== p.role) emit('auth'); else emit('data'); }, err));
+    unsubs.push(db.collection('users').doc(uid).onSnapshot(s => { if (!s.exists || s.metadata.hasPendingWrites) return; const p = s.data(); const was = S.profile; S.profile = p; lsSet('profile', p); if (p.active && p.role === 'sales') Track.start(); else Track.stop(); if (!was || was.active !== p.active || was.role !== p.role) emit('auth'); else emit('data'); }, err));
     const put = (docs, map) => docs.forEach(d => { const r = d.data(), cur = map.get(r.id); if (!cur || (r.upd || 0) >= (cur.upd || 0) || !pending().includes(r.id)) map.set(r.id, r); });
     if (isMgr()) {
       unsubs.push(recs.where('date', '>=', from).orderBy('date', 'desc').limit(5000).onSnapshot(s => { put(s.docs, S.records); S.loaded = true; setState('live'); emit('data'); }, err));
       unsubs.push(recs.where('open', '==', true).limit(2000).onSnapshot(s => { S.openQ = new Map(s.docs.map(d => [d.id, d.data()])); emit('data'); }, err));
+      unsubs.push(db.collection('lastLocation').onSnapshot(s => { S.lastLoc = new Map(s.docs.map(d => [d.id, d.data()])); emit('loc'); }, err));
       unsubs.push(db.collection('users').onSnapshot(s => { S.users = new Map(s.docs.map(d => [d.id, {uid: d.id, ...d.data()}])); emit('data'); }, err));
       unsubs.push(db.collection('targets').where('month', '>=', LE.month(LE.addDays(LE.today(), -95))).onSnapshot(s => { S.targets = new Map(s.docs.map(d => [d.id, d.data()])); emit('data'); }, err));
     } else {
@@ -64,6 +65,7 @@ const DB = (() => {
       unsubs.push(recs.where('ownerUid', '==', uid).where('open', '==', true).onSnapshot(s => { S.openQ = new Map(s.docs.map(d => [d.id, d.data()])); emit('data'); }, err));
       unsubs.push(db.collection('targets').where('uid', '==', uid).onSnapshot(s => { S.targets = new Map(s.docs.map(d => [d.id, d.data()])); emit('data'); }, err));
     }
+    if (S.profile.role === 'sales') Track.start();
     flush();
   }
   function err(e) { console.warn('firestore', e); if (e.code === 'permission-denied') { setState('denied'); } else setState('error'); emit('error'); }
@@ -71,6 +73,54 @@ const DB = (() => {
   function saveLocal() {
     const from = LE.addDays(LE.today(), -WINDOW_DAYS), p = pending();
     lsSet('recs', [...S.records.values()].filter(r => r.ownerUid === S.user.uid && (r.date >= from || p.includes(r.id))));
+  }
+
+
+  /* ---- live tracking: while the app is open (web). Android app will write the same docs with source:'android' ---- */
+  const Track = (() => {
+    const EVERY = EMU && +localStorage.getItem('le_track_ms') || 120000;   // ~2 min
+    const MOVE_M = 150, MIN_GAP = Math.min(20000, EVERY / 2);
+    let watch = null, timer = null, fix = null, lastPt = null, battery = null;
+    const dist = (a, b) => { const R = 6371000, r = x => x * Math.PI / 180, dLa = r(b.lat - a.lat), dLo = r(b.lng - a.lng);
+      const h = Math.sin(dLa / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+    const set = (state, e) => { S.track.state = state; S.track.err = e || ''; emit('track'); };
+    function write(f, reason) {
+      if (!S.user || !S.profile || !S.profile.active) return;
+      const d = {ownerUid: S.user.uid, ownerName: S.profile.name, lat: f.lat, lng: f.lng, accuracy: Math.round(f.accuracy || 0), ts: f.ts, date: LE.dstr(f.ts),
+        source: 'web', reason, appVersion: 'web-2', updatedAt: Date.now()};
+      if (f.speed != null && !isNaN(f.speed)) d.speed = f.speed; if (f.heading != null && !isNaN(f.heading)) d.heading = f.heading;
+      if (battery) { d.battery = Math.round(battery.level * 100) / 100; d.charging = !!battery.charging; }
+      const id = S.user.uid + '_' + f.ts.toString(36);
+      // fire-and-forget: Firestore keeps these in its offline queue and sends them when back online
+      db.collection('locations').doc(id).set(d).catch(e => console.warn('loc write', e.code));
+      db.collection('lastLocation').doc(S.user.uid).set(d).catch(e => console.warn('lastLoc write', e.code));
+      lastPt = f; S.track.lastWrite = Date.now(); S.track.count++; S.track.last = d; emit('track');
+    }
+    function onFix(p, reason) {
+      fix = {lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, speed: p.coords.speed, heading: p.coords.heading, ts: p.timestamp || Date.now()};
+      if (S.track.state !== 'on') set('on');
+      const since = Date.now() - S.track.lastWrite;
+      if (!lastPt) return write(fix, 'start');
+      if (since >= EVERY) return write(fix, reason || 'interval');
+      if (since >= MIN_GAP && dist(lastPt, fix) >= MOVE_M && fix.accuracy < 200) return write(fix, 'move');
+    }
+    function onErr(e) { set(e.code === 1 ? 'denied' : 'error', e.message); }
+    function start() {
+      if (watch !== null) return;
+      if (!navigator.geolocation) return set('unsupported');
+      navigator.getBattery && navigator.getBattery().then(b => battery = b).catch(() => {});
+      set('starting');
+      watch = navigator.geolocation.watchPosition(p => onFix(p), onErr, {enableHighAccuracy: true, maximumAge: 30000, timeout: 60000});
+      // watchPosition may stay silent while standing still: poll so a point is written every ~2 min
+      timer = setInterval(() => { if (Date.now() - S.track.lastWrite >= EVERY - 1000) navigator.geolocation.getCurrentPosition(p => onFix(p, 'interval'), onErr, {enableHighAccuracy: true, maximumAge: 20000, timeout: 30000}); }, Math.min(EVERY, 30000));
+    }
+    function stop() { if (watch !== null) navigator.geolocation.clearWatch(watch); clearInterval(timer); watch = timer = null; fix = lastPt = null; S.track.state = 'off'; S.track.lastWrite = 0; emit('track'); }
+    const checkin = f => { if (watch !== null && f && f.lat != null) write({lat: f.lat, lng: f.lng, accuracy: f.accuracy || 0, ts: f.gpsTs || Date.now()}, 'checkin'); };
+    return {start, stop, checkin, retry: () => { stop(); start(); }};
+  })();
+  async function routeFor(uid, date) {
+    const s = await db.collection('locations').where('ownerUid', '==', uid).where('date', '==', date).limit(2000).get();
+    return s.docs.map(d => d.data()).sort((a, b) => a.ts - b.ts);
   }
 
   /* ---- writes ---- */
@@ -149,5 +199,5 @@ const DB = (() => {
   }
 
   return {S, init, on: f => subs.add(f), save, flush, pending, login, logout, resetPw, ownerSignup, resendVerify, claimAdmin, changePassword,
-    createEmployee, updateUser, setTarget, customerHistory, isMgr, isAdmin, get auth() { return auth; }, EMU};
+    createEmployee, updateUser, setTarget, customerHistory, routeFor, Track, isMgr, isAdmin, get auth() { return auth; }, EMU};
 })();

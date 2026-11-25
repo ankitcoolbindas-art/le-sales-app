@@ -77,6 +77,17 @@ function visitsLayer(pts) {
     return pts.map(r => [r.lat, r.lng]);
   };
 }
+/* plain-language reason a salesperson is not live, from their last location + today's attendance */
+function locWhy(u, l) {
+  const at = typeof ATT !== 'undefined' && ATT.A.today ? ATT.A.today.get(u.uid) : null, m = l ? (Date.now() - l.ts) / 60000 : Infinity;
+  if (l && l.mock) return '⚠ Fake GPS on this phone — position not trusted';
+  if (m < 5) return '';
+  const app = l && l.source === 'android' ? (String(l.appVersion || '').startsWith('ios') ? 'iPhone app' : 'Android app') : l ? 'phone browser' : '';
+  if (at && at.status === 'out') return `Checked out ${at.outTs ? time(at.outTs) : ''} — sharing stopped for the day`;
+  if (l && l.date === today()) return app === 'phone browser' ? `Last seen ${LE.ago(l.ts)} — browser page closed or screen locked (browser shares only while open)` : `Last seen ${LE.ago(l.ts)} — phone off / no internet / app stopped (Day ended or battery saver). Ask them to open LE Sales`;
+  if (at) return `Checked in ${at.inTs ? time(at.inTs) : ''} but no location today — location permission off / GPS off${app === 'Android app' || !l ? ' or Start day not tapped in the app' : ''}`;
+  return l ? `Not checked in today · last seen ${LE.niceLong ? LE.niceLong(l.date) : l.date}` : 'Never shared — not signed in on phone yet, or location permission denied';
+}
 const fresh = ts => { const m = (Date.now() - ts) / 60000; return m < 5 ? ['#3ddc97', 'live', 'Live'] : m < 30 ? ['#ffc53d', 'recent', 'Recent'] : ['#77829a', 'old', 'Offline']; };
 const kmOf = a => { let d = 0; for (let i = 1; i < a.length; i++) { const p = a[i - 1], q = a[i], R = 6371, r = x => x * Math.PI / 180, h = Math.sin(r(q.lat - p.lat) / 2) ** 2 + Math.cos(r(p.lat)) * Math.cos(r(q.lat)) * Math.sin(r(q.lng - p.lng) / 2) ** 2; d += 2 * R * Math.asin(Math.sqrt(h)); } return d; };
 const legend = pts => { const u = [...new Set(pts.map(r => r.ownerUid))]; return u.length ? `<div class="legend">${u.map(id => `<span><i style="background:${colorOf(id)}"></i>${esc((S.users.get(id) || {}).name || '')} · ${pts.filter(r => r.ownerUid === id).length}</span>`).join('')}</div>` : ''; };
@@ -147,7 +158,7 @@ V.dashboard = {mgr: true, title: 'Dashboard', render() {
 V.activity = {mgr: true, title: 'Live activity', render() {
   const k = st.q.ak || 'all', a = byRep(all()).filter(r => k === 'all' || r.kind === k).sort((x, y) => (y.upd || y.ts) - (x.upd || x.ts)).slice(0, 200);
   const groups = []; a.forEach(r => { const g = groups[groups.length - 1]; if (!g || g.d !== r.date) groups.push({d: r.date, items: [r]}); else g.items.push(r); });
-  return `<div class="page-h"><div><h1>Live activity</h1><p>Every visit, quote, order and collection as it is saved · <span class="sync live" style="padding:2px 8px"><i></i>real time</span></p></div><div class="toolbar">${repSel()}</div></div>
+  return `<div class="page-h"><div><h1>Live activity</h1><p>Every visit, quote, order and collection as it is saved · <span class="sync live" style="padding:2px 8px"><i></i>real time</span> · <a href="#/map">Live locations on map →</a></p></div><div class="toolbar">${repSel()}</div></div>
    <div class="chips scroll" style="margin-bottom:12px">${[['all', 'All'], ['visit', 'Visits'], ['quote', 'Quotations'], ['order', 'Orders'], ['payment', 'Collections']].map(([v, l]) => `<button class="chip ${k === v ? 'on' : ''}" data-seg="ak" data-v="${v}">${l}</button>`).join('')}</div>
    ${groups.map(g => `<div class="card-h" style="margin:14px 2px 8px"><h3>${g.d === today() ? 'Today' : niceLong(g.d)}</h3><span class="sub">${g.items.length}</span></div>${listCard(g.items.map(r => li(r, {who: true})), '')}`).join('') || '<div class="empty">No activity yet</div>'}`;
 }};
@@ -167,14 +178,17 @@ V.map = {mgr: true, title: 'Map', render() {
   if (mode === 'live') {
     const sales = people().filter(u => u.active && u.role === 'sales');
     const rows = sales.map(u => ({u, l: S.lastLoc.get(u.uid)})).sort((a, b) => ((b.l || {}).ts || 0) - ((a.l || {}).ts || 0));
-    const nLive = rows.filter(x => x.l && fresh(x.l.ts)[1] === 'live').length;
+    const nLive = rows.filter(x => x.l && fresh(x.l.ts)[1] === 'live').length, nToday = rows.filter(x => x.l && x.l.date === today()).length;
+    const mgrs = people().filter(u => u.active && u.role === 'manager').length;
+    const banner = !sales.length ? `<div class="locbar">${icon('alert')}<div><b>No active salespeople.</b> Only employees with role <b>Sales</b> share location${mgrs ? ` — ${mgrs} manager(s) are not tracked` : ''}. Add or change them in Team &amp; targets.</div></div>`
+      : !nLive ? `<div class="locbar">${icon('alert')}<div><b>No one is sharing location right now${nToday ? ` (${nToday} shared earlier today)` : ''}.</b> Ask salespeople to <b>Check in / Start day</b> and keep the LE Sales app open — the Android app shares all day after Start day; a phone browser shares only while the page is open and the screen is on. Each person’s status and the likely reason are listed with the map.</div></div>` : '';
     return `<div class="page-h"><div><h1>Live locations</h1><p>${nLive} of ${sales.length} salespeople live now · updates every ~3 min all day from the Android app after Start day (web: every ~2 min while open)</p></div><div class="toolbar">${modes}</div></div>
-     <div class="dash two"><div class="card"><div class="mapbox tall" id="mapslot"></div>
+     ${banner}<div class="dash two"><div class="card"><div class="mapbox tall" id="mapslot"></div>
       <div class="legend"><span><i style="background:#3ddc97"></i>seen &lt; 5 min</span><span><i style="background:#ffc53d"></i>&lt; 30 min</span><span><i style="background:#77829a"></i>older</span></div></div>
       <div class="card pad0"><div class="card-h" style="padding:14px 16px 0"><h3>Salespeople</h3><span class="sub">last seen</span></div><div class="list">
-      ${rows.map(({u, l}) => { const f = l ? fresh(l.ts) : ['#77829a', 'old', 'No location yet'];
+      ${rows.map(({u, l}) => { const f = l ? fresh(l.ts) : ['#77829a', 'old', 'No location yet'], why = locWhy(u, l);
         return `<div class="li"><span class="avatar sm" style="box-shadow:0 0 0 2px ${f[0]};color:${colorOf(u.uid)}">${LE.initials(u.name)}</span><div class="b"><div class="t"><span>${esc(u.name)}</span><span class="tag" style="color:${f[0]};background:rgba(255,255,255,.06)">${l ? f[2] : '—'}</span>${l && l.mock ? '<span class="tag mock">⚠ Fake GPS</span>' : ''}</div>
-         <div class="m">${l ? `<span>${LE.ago(l.ts)} · ${time(l.ts)}</span><span>· ±${l.accuracy}m</span>${l.battery != null ? `<span>· 🔋${Math.round(l.battery * 100)}%${l.charging ? '⚡' : ''}</span>` : ''}<span>· ${esc(l.source)}</span><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">map</a><a href="#" data-route="${u.uid}">route</a>` : '<span>Not shared yet (app not opened or location off)</span>'}</div></div></div>`; }).join('') || '<div style="padding:14px"><div class="empty">No active salespeople</div></div>'}</div></div></div>`;
+         <div class="m">${l ? `<span>${LE.ago(l.ts)} · ${time(l.ts)}</span><span>· ±${l.accuracy}m</span>${l.battery != null ? `<span>· 🔋${Math.round(l.battery * 100)}%${l.charging ? '⚡' : ''}</span>` : ''}<span>· ${esc(l.source)}</span><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">map</a><a href="#" data-route="${u.uid}">route</a>` : ''}</div>${why ? `<div class="m locwhy">${why}</div>` : ''}</div></div>`; }).join('') || '<div style="padding:14px"><div class="empty">No active salespeople</div></div>'}</div></div></div>`;
   }
   if (mode === 'route') {
     const sales = people().filter(u => u.role === 'sales'), uid = routeUid(sales);

@@ -1,0 +1,52 @@
+// Location writers vs published rules: web SDK payloads + exact Android v1.0 / v1.1 / iOS REST commit payloads (auth-emulator tokens), and Live map reads.
+import {initializeTestEnvironment, assertSucceeds, assertFails} from '@firebase/rules-unit-testing';
+import {doc, setDoc, getDoc, collection, query, where, getDocs, limit} from 'firebase/firestore';
+import fs from 'fs';
+const P = 'le-sales-app', FS = `http://127.0.0.1:8080/v1/projects/${P}/databases/(default)/documents`, AU = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1';
+const env = await initializeTestEnvironment({projectId: P, firestore: {rules: fs.readFileSync('/workspace/le-sales-app/firestore.rules', 'utf8'), host: '127.0.0.1', port: 8080}});
+await env.clearFirestore(); await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${P}/accounts`, {method: 'DELETE'});
+const results = []; let fail = 0;
+const t = async (name, p) => { try { await p; results.push('PASS ' + name); } catch (e) { fail++; results.push('FAIL ' + name + ' :: ' + String(e.message).slice(0, 220)); } };
+const ist = ms => new Date(ms + 330 * 60000).toISOString().slice(0, 10), TODAY = ist(Date.now());
+const signUp = async email => (await (await fetch(`${AU}/accounts:signUp?key=fake`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email, password: 'Passw0rd!x', returnSecureToken: true})})).json());
+const S1 = await signUp('s1@example.com'), S2 = await signUp('s2@example.com'), X1 = await signUp('x1@example.com');
+const prof = (name, role, active = true) => ({name, email: name + '@example.com', phone: '', role, territory: 'Ranchi', active, createdAt: Date.now(), createdBy: 'owner', mustChangePassword: false});
+await env.withSecurityRulesDisabled(async c => { const db = c.firestore();
+  await setDoc(doc(db, 'users/owner'), {...prof('Owner', 'admin'), email: 'ankitcoolbindas@gmail.com'}); await setDoc(doc(db, 'users/m1'), prof('m1', 'manager'));
+  await setDoc(doc(db, 'users/' + S1.localId), prof('s1', 'sales')); await setDoc(doc(db, 'users/' + S2.localId), prof('s2', 'sales')); await setDoc(doc(db, 'users/' + X1.localId), prof('x1', 'sales', false)); });
+// ---- web SDK (js/data.js Track.write) ----
+const web = (uid, extra = {}) => ({ownerUid: uid, ownerName: 's2', lat: 23.3615, lng: 85.324, accuracy: 14, ts: Date.now(), date: TODAY, source: 'web', reason: 'start', appVersion: 'web-2', updatedAt: Date.now(), ...extra});
+const w2 = env.authenticatedContext(S2.localId, {email: 's2@example.com'}).firestore();
+const u2 = S2.localId;
+await t('web: start point (no speed/battery)', assertSucceeds(setDoc(doc(w2, `locations/${u2}_${Date.now().toString(36)}`), web(u2))));
+await t('web: point with speed/heading/battery/charging', assertSucceeds(setDoc(doc(w2, `locations/${u2}_a1`), web(u2, {speed: 0, heading: 12.5, battery: 0.87, charging: false, reason: 'interval'}))));
+await t('web: lastLocation set (create)', assertSucceeds(setDoc(doc(w2, `lastLocation/${u2}`), web(u2))));
+await t('web: lastLocation set (overwrite)', assertSucceeds(setDoc(doc(w2, `lastLocation/${u2}`), web(u2, {reason: 'move', battery: 1, charging: true}))));
+await t('web: checkin point (accuracy 0)', assertSucceeds(setDoc(doc(w2, `locations/${u2}_a2`), web(u2, {reason: 'checkin', accuracy: 0}))));
+await t('web: v3.1 blocked attempt point (mock + mockApp)', assertSucceeds(setDoc(doc(w2, `locations/${u2}_a3`), web(u2, {source: 'android', reason: 'checkin-blocked', mock: true, mockApp: 'Fake GPS Location', appVersion: 'android-1.1.0'}))));
+// ---- native REST commit (TrackingService.java / native.js iOS) ----
+const val = v => typeof v === 'boolean' ? {booleanValue: v} : Number.isInteger(v) ? {integerValue: String(v)} : typeof v === 'number' ? {doubleValue: v} : {stringValue: String(v)};
+const fields = d => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, val(v)]));
+const commit = async (tok, docs) => { const base = `projects/${P}/databases/(default)/documents/`, latest = docs[docs.length - 1];
+  const writes = [...docs.map(d => ({update: {name: base + 'locations/' + d.ownerUid + '_' + d.ts.toString(36) + 'i', fields: fields(d)}})), {update: {name: base + 'lastLocation/' + latest.ownerUid, fields: fields(latest)}}];
+  const r = await fetch(`${FS}:commit`, {method: 'POST', headers: {'content-type': 'application/json', Authorization: 'Bearer ' + tok}, body: JSON.stringify({writes})});
+  if (r.status !== 200) throw new Error(r.status + ' ' + (await r.text()).slice(0, 200)); return r.status; };
+const nat = (uid, ver, extra = {}) => ({ownerUid: uid, ownerName: 's1', lat: 23.36152, lng: 85.32401, accuracy: 9, ts: Date.now(), date: TODAY, source: 'android', reason: 'start', deviceId: 'Xiaomi Redmi Note 12', appVersion: 'android-' + ver, battery: 0.64, charging: false, speed: 0.4, heading: 182.5, updatedAt: Date.now(), ...extra});
+const u1 = S1.localId;
+await t('android 1.0 REST: start point + lastLocation', commit(S1.idToken, [nat(u1, '1.0.0')]));
+await t('android 1.0 REST: battery 1 as integerValue, no speed/heading', commit(S1.idToken, [(({speed, heading, ...d}) => d)(nat(u1, '1.0.0', {battery: 1, charging: true, ts: Date.now() + 1, reason: 'interval'}))]));
+await t('android 1.0 REST: batch of 3 queued points', commit(S1.idToken, [0, 1, 2].map(i => nat(u1, '1.0.0', {ts: Date.now() - 600000 + i * 180000, reason: 'interval'}))));
+await t('android 1.1 REST: mock point', commit(S1.idToken, [nat(u1, '1.1.0', {mock: true, reason: 'mock', ts: Date.now() + 5})]));
+await t('android 1.1 REST: normal point after mock (lastLocation overwritten, no mock)', commit(S1.idToken, [nat(u1, '1.1.0', {ts: Date.now() + 9})]));
+await t('iOS REST payload', commit(S1.idToken, [{ownerUid: u1, ownerName: 's1', lat: 23.3, lng: 85.3, accuracy: 30, ts: Date.now() + 20, date: TODAY, source: 'android', reason: 'start', deviceId: 'iPhone', appVersion: 'ios-1.0.0', updatedAt: Date.now()}]));
+await t('inactive employee REST write denied (403)', commit(X1.idToken, [nat(X1.localId, '1.0.0')]).then(() => { throw new Error('ALLOWED'); }, e => { if (!/^403/.test(e.message)) throw e; }));
+// ---- reads used by the admin panel ----
+const admin = env.authenticatedContext('owner', {email: 'ankitcoolbindas@gmail.com'}).firestore(), m1 = env.authenticatedContext('m1', {email: 'm1@example.com'}).firestore();
+await t('admin lists lastLocation (Live map)', getDocs(collection(admin, 'lastLocation')).then(s => { if (s.size !== 2) throw new Error('size ' + s.size); results.push('  lastLocation docs: ' + s.docs.map(d => d.data().source + '/' + d.data().appVersion + (d.data().mock ? '/MOCK' : '')).join(', ')); }));
+await t('manager lists lastLocation', assertSucceeds(getDocs(collection(m1, 'lastLocation'))));
+await t('admin route query (ownerUid+date)', getDocs(query(collection(admin, 'locations'), where('ownerUid', '==', u1), where('date', '==', TODAY), limit(2000))).then(s => results.push('  route points s1: ' + s.size)));
+await t('admin fake-GPS today query', assertSucceeds(getDocs(query(collection(admin, 'locations'), where('date', '==', TODAY), where('mock', '==', true)))));
+await t('admin fake-GPS month query', assertSucceeds(getDocs(query(collection(admin, 'locations'), where('mock', '==', true), limit(2000)))));
+await t('sales cannot list lastLocation', assertFails(getDocs(collection(w2, 'lastLocation'))));
+console.log(results.join('\n')); console.log(`${results.filter(r => r.startsWith('PASS')).length} passed, ${fail} failed`);
+await env.cleanup(); process.exit(fail ? 1 : 0);

@@ -173,7 +173,7 @@ V.map = {mgr: true, title: 'Map', render() {
       <div class="legend"><span><i style="background:#3ddc97"></i>seen &lt; 5 min</span><span><i style="background:#ffc53d"></i>&lt; 30 min</span><span><i style="background:#77829a"></i>older</span></div></div>
       <div class="card pad0"><div class="card-h" style="padding:14px 16px 0"><h3>Salespeople</h3><span class="sub">last seen</span></div><div class="list">
       ${rows.map(({u, l}) => { const f = l ? fresh(l.ts) : ['#77829a', 'old', 'No location yet'];
-        return `<div class="li"><span class="avatar sm" style="box-shadow:0 0 0 2px ${f[0]};color:${colorOf(u.uid)}">${LE.initials(u.name)}</span><div class="b"><div class="t"><span>${esc(u.name)}</span><span class="tag" style="color:${f[0]};background:rgba(255,255,255,.06)">${l ? f[2] : '—'}</span></div>
+        return `<div class="li"><span class="avatar sm" style="box-shadow:0 0 0 2px ${f[0]};color:${colorOf(u.uid)}">${LE.initials(u.name)}</span><div class="b"><div class="t"><span>${esc(u.name)}</span><span class="tag" style="color:${f[0]};background:rgba(255,255,255,.06)">${l ? f[2] : '—'}</span>${l && l.mock ? '<span class="tag mock">⚠ Fake GPS</span>' : ''}</div>
          <div class="m">${l ? `<span>${LE.ago(l.ts)} · ${time(l.ts)}</span><span>· ±${l.accuracy}m</span>${l.battery != null ? `<span>· 🔋${Math.round(l.battery * 100)}%${l.charging ? '⚡' : ''}</span>` : ''}<span>· ${esc(l.source)}</span><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">map</a><a href="#" data-route="${u.uid}">route</a>` : '<span>Not shared yet (app not opened or location off)</span>'}</div></div></div>`; }).join('') || '<div style="padding:14px"><div class="empty">No active salespeople</div></div>'}</div></div></div>`;
   }
   if (mode === 'route') {
@@ -181,7 +181,7 @@ V.map = {mgr: true, title: 'Map', render() {
     const key = uid + '|' + d, pts = routeCache.key === key ? routeCache.pts : null;
     const vis = all().filter(r => r.kind === 'visit' && r.ownerUid === uid && r.date === d && r.lat != null).sort((a, b) => a.ts - b.ts);
     const sel = `<select data-sel="ru" style="width:auto;min-height:38px;margin:0">${sales.map(u => `<option value="${u.uid}" ${u.uid === uid ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>`;
-    const info = !uid ? 'No salespeople yet' : !pts ? 'Loading route…' : pts.length ? `${pts.length} points · ${kmOf(pts).toFixed(1)} km · ${time(pts[0].ts)} – ${time(pts[pts.length - 1].ts)} · ${vis.length} check-in(s)` : `No tracked points for this day · ${vis.length} check-in(s)`;
+    const info = !uid ? 'No salespeople yet' : !pts ? 'Loading route…' : pts.length ? `${pts.filter(p => p.mock).length ? `⚠ ${pts.filter(p => p.mock).length} fake-GPS point(s) · ` : ''}${pts.length} points · ${kmOf(pts).toFixed(1)} km · ${time(pts[0].ts)} – ${time(pts[pts.length - 1].ts)} · ${vis.length} check-in(s)` : `No tracked points for this day · ${vis.length} check-in(s)`;
     return `<div class="page-h"><div><h1>Route replay</h1><p>${info}</p></div><div class="toolbar">${modes}${sel}${dateIn}<button class="btn sm" id="rref">Refresh</button></div></div>
      <div class="card"><div class="mapbox tall" id="mapslot"></div><div class="legend"><span><i style="background:#3ddc97"></i>start</span><span><i style="background:#ff6b6b"></i>end / last</span><span><i style="background:${uid ? colorOf(uid) : '#fff'}"></i>numbered = customer check-ins</span><span>dotted = tracked path</span></div></div>`;
   }
@@ -196,7 +196,7 @@ V.map = {mgr: true, title: 'Map', render() {
     const rows = people().filter(u => u.active && u.role === 'sales').map(u => ({u, l: S.lastLoc.get(u.uid)})).filter(x => x.l);
     MapC.mount(slot, layer => { rows.forEach(({u, l}) => { const f = fresh(l.ts);
       if (l.accuracy > 30 && l.accuracy < 2000) L.circle([l.lat, l.lng], {radius: l.accuracy, color: f[0], weight: 1, opacity: .4, fillOpacity: .06}).addTo(layer);
-      L.marker([l.lat, l.lng], {icon: pin(colorOf(u.uid), LE.initials(u.name), f[0])}).bindPopup(`<b>${esc(u.name)}</b><br>${f[2]} · ${LE.ago(l.ts)} (${time(l.ts)})<br>±${l.accuracy} m${l.battery != null ? ' · battery ' + Math.round(l.battery * 100) + '%' : ''}<br><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`).addTo(layer); });
+      L.marker([l.lat, l.lng], {icon: pin(colorOf(u.uid), LE.initials(u.name), l.mock ? '#ff3b3b' : f[0])}).bindPopup(`<b>${esc(u.name)}</b>${l.mock ? '<br><b style="color:#ff6b6b">⚠ FAKE GPS — this position is from a mock-location app</b>' : ''}<br>${f[2]} · ${LE.ago(l.ts)} (${time(l.ts)})<br>±${l.accuracy} m${l.battery != null ? ' · battery ' + Math.round(l.battery * 100) + '%' : ''}<br><a href="${LE.map(l.lat, l.lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`).addTo(layer); });
       return rows.map(x => [x.l.lat, x.l.lng]); }, 'live' + rows.map(x => x.u.uid).join());
     clearTimeout(V.map._t); V.map._t = setTimeout(() => { if ((location.hash.split('/')[1] || '') === 'map' && (st.q.mm || 'live') === 'live' && !document.getElementById('modal')) render(); }, 30000);
     return;
@@ -210,7 +210,7 @@ V.map = {mgr: true, title: 'Map', render() {
     const pts = routeCache.key === key && routeCache.pts || [], vis = all().filter(r => r.kind === 'visit' && r.ownerUid === uid && r.date === d && r.lat != null).sort((a, b) => a.ts - b.ts), c = colorOf(uid);
     MapC.mount(slot, layer => {
       if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lng]), {color: c, weight: 3, opacity: .8, dashArray: '4 6'}).addTo(layer);
-      pts.forEach((p, i) => { if (i && i < pts.length - 1) L.circleMarker([p.lat, p.lng], {radius: 3, color: c, weight: 1, fillOpacity: .9}).bindTooltip(time(p.ts)).addTo(layer); });
+      pts.forEach((p, i) => { if ((i && i < pts.length - 1) || p.mock) L.circleMarker([p.lat, p.lng], {radius: p.mock ? 6 : 3, color: p.mock ? '#ff3b3b' : c, weight: p.mock ? 2 : 1, fillOpacity: .9}).bindTooltip(time(p.ts) + (p.mock ? ' · FAKE GPS' : '')).addTo(layer); });
       if (pts.length) { L.marker([pts[0].lat, pts[0].lng], {icon: pin('#3ddc97', 'S')}).bindPopup('Start ' + time(pts[0].ts)).addTo(layer); const z = pts[pts.length - 1]; L.marker([z.lat, z.lng], {icon: pin('#ff6b6b', 'E')}).bindPopup((d === today() ? 'Last seen ' : 'End ') + time(z.ts)).addTo(layer); }
       vis.forEach((r, i) => L.marker([r.lat, r.lng], {icon: pin(c, i + 1)}).bindPopup(`<b>${esc(r.customer)}</b><br>Check-in ${time(r.ts)}<br>${esc(r.requirement || '')}`).addTo(layer));
       return [...pts.map(p => [p.lat, p.lng]), ...vis.map(r => [r.lat, r.lng])];

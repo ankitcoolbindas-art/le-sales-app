@@ -15,6 +15,13 @@
   const BG = PLATFORM === 'ios' ? Cap.registerPlugin('BackgroundGeolocation') : null;
   const HTTP = Cap.Plugins.CapacitorHttp;
   window.LE_NATIVE = {platform: PLATFORM};
+  // v1.1 app (Android): in-app live camera + native fix with fake-GPS detection. Older installs keep the v1.0 behaviour.
+  const gte = (a, b) => { const x = String(a || '0').split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== y[i]) return (x[i] || 0) > y[i]; } return true; };
+  window.LE_NATIVE.ready = PLATFORM !== 'android' ? Promise.resolve() : Cap.Plugins.LENative.status().then(s => {
+    window.LE_NATIVE.appVersion = s.appVersion;
+    if (gte(s.appVersion, '1.1.0')) Object.assign(window.LE_NATIVE, {liveCamera: true, mockCheck: true,
+      fix: o => Cap.Plugins.LENative.currentFix(o || {}), mockStatus: () => Cap.Plugins.LENative.mockStatus(), openSettings: () => Cap.Plugins.LENative.openAppSettings()});
+  }).catch(() => {});
   document.documentElement.classList.add('le-native', 'le-' + PLATFORM);
   const S = DB.S;
   const isSales = () => S.user && S.profile && S.profile.active && S.profile.role === 'sales';
@@ -150,7 +157,9 @@
   function paintPill() {
     if (!isSales()) { pill.classList.remove('show'); return; }
     pill.classList.add('show');
-    if (st.active) {
+    if (st.active && st.mockAt && Date.now() - st.mockAt < 15 * 60000) {
+      pill.className = 'le-day show warn'; pill.innerHTML = '<i></i><span>⚠ Fake GPS detected · turn it off</span>';
+    } else if (st.active) {
       const warn = st.lastError || (st.lastSentAt && Date.now() - st.lastSentAt > 15 * 60000);
       pill.className = 'le-day show ' + (warn ? 'warn' : 'on');
       pill.innerHTML = `<i></i><span>Day on · ${st.lastSentAt ? 'sent ' + fmt(st.lastSentAt) : 'starting…'}</span>`;
@@ -205,7 +214,7 @@
       row(p.batteryUnrestricted, 'Battery: unrestricted', 'So the phone does not stop sharing / बैटरी पाबंदी हटाएँ', 'battery', 'Allow') +
       (oem ? `<div class="row"><span class="le-no">i</span><b>${oem}: Autostart / background<small>${oem.startsWith('Xiaomi') ? 'Security → Autostart → LE Sales ON; App info → Battery saver → No restrictions' : oem.startsWith('Vivo') ? 'i Manager → App manager → Autostart ON; Battery → Background power → Allow high usage' : oem.startsWith('Oppo') ? 'App info → Battery → Allow background activity + Auto launch ON' : oem === 'Samsung' ? 'Battery → Background usage limits → remove LE Sales from Sleeping apps' : 'Allow LE Sales to auto-launch and run in background'}. Also lock LE Sales in Recent apps (🔒).</small></b><button data-a="autostart">Open</button></div>` : '');
     const status = st.active
-      ? `<p class="hi">Sharing your location with Lalit Enterprises since ${fmt(st.startedAt)} · last sent ${fmt(st.lastSentAt)} · ${st.sentCount || 0} update(s) today${st.queued ? ` · ${st.queued} waiting for internet` : ''}. Auto-stops at ${STOP_HOUR - 12} PM.</p>${st.lastError ? `<p class="hi" style="color:var(--amber,#ffc53d)">⚠ ${LE.esc(st.lastError)}</p>` : ''}`
+      ? `<p class="hi">Sharing your location with Lalit Enterprises since ${fmt(st.startedAt)} · last sent ${fmt(st.lastSentAt)} · ${st.sentCount || 0} update(s) today${st.queued ? ` · ${st.queued} waiting for internet` : ''}. Auto-stops at ${STOP_HOUR - 12} PM.</p>${st.lastError ? `<p class="hi" style="color:var(--amber,#ffc53d)">⚠ ${LE.esc(st.lastError)}</p>` : ''}${st.mockAt && Date.now() - st.mockAt < 15 * 60000 ? '<p class="hi" style="color:var(--red,#ff6b6b)"><b>⚠ Fake GPS detected.</b> Turn off / uninstall the mock-location app. Your positions are marked FAKE for the owner. नकली GPS ऐप बंद करें।</p>' : ''}`
       : `<p class="hi">${afterHours() ? `Your day has ended (auto-stop at ${STOP_HOUR - 12} PM). See you tomorrow!` : 'Tap <b>Start day</b> when you begin field work. Your location is shared with Lalit Enterprises every ~3 minutes and when you move — <b>even when the app is closed or not in use</b> — until you tap End day (auto-stops at 9 PM).'}</p>
          <p class="hi">काम शुरू करते समय <b>Start day</b> दबाएँ। दिन भर हर ~3 मिनट में और चलने पर आपकी लोकेशन Lalit Enterprises को भेजी जाएगी। <b>End day</b> दबाने पर या रात 9 बजे अपने-आप बंद हो जाएगी।</p>`;
     const acts = st.active

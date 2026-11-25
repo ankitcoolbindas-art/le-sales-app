@@ -6,7 +6,7 @@ const {esc, money, today, nice, niceLong, time} = LE;
 const {V, st, render, modal, closeModal, mh, kpi, listCard, $, $$} = UI;
 const S = DB.S;
 const DEF = {start: '10:00', grace: 15, halfHours: 4, weekOff: [0], holidays: [], basis: 'calendar', latePerHalf: 0};
-const A = {settings: {...DEF}, mine: new Map(), myMonths: new Set(), leaves: new Map(), today: new Map(), month: new Map(), monthKey: '',
+const A = {mockToday: new Map(), mockDays: new Map(), settings: {...DEF}, mine: new Map(), myMonths: new Set(), leaves: new Map(), today: new Map(), month: new Map(), monthKey: '',
   salary: new Map(), payroll: new Map(), payMonth: '', slips: null, photos: new Map(), loaded: false};
 let unsubs = [], monthUnsub = null, payUnsub = null, myUnsubs = new Map();
 const fs = () => firebase.firestore();
@@ -72,13 +72,14 @@ DB.on(what => { if (what === 'auth') boot(); });
 function stopAll() { unsubs.forEach(u => u()); unsubs = []; monthUnsub && monthUnsub(); payUnsub && payUnsub(); myUnsubs.forEach(u => u()); myUnsubs = new Map(); monthUnsub = payUnsub = null; }
 function boot() {
   stopAll();
-  Object.assign(A, {settings: {...DEF}, mine: new Map(), myMonths: new Set(), leaves: new Map(), today: new Map(), month: new Map(), monthKey: '', salary: new Map(), payroll: new Map(), payMonth: '', slips: null, photos: new Map(), loaded: false});
+  Object.assign(A, {mockToday: new Map(), mockDays: new Map(), settings: {...DEF}, mine: new Map(), myMonths: new Set(), leaves: new Map(), today: new Map(), month: new Map(), monthKey: '', salary: new Map(), payroll: new Map(), payMonth: '', slips: null, photos: new Map(), loaded: false});
   if (!S.user || !S.profile || !S.profile.active) return;
   const db = fs(), uid = S.user.uid;
   unsubs.push(db.collection('settings').doc('attendance').onSnapshot(s => { A.settings = {...DEF, ...(s.exists ? s.data() : {})}; redraw(); }, warn));
   if (staffRole()) { watchMine(LE.month()); unsubs.push(db.collection('leaves').where('uid', '==', uid).onSnapshot(s => { if (!DB.isMgr()) A.leaves = new Map(s.docs.map(d => [d.id, {id: d.id, ...d.data()}])); else s.docs.forEach(d => A.leaves.set(d.id, {id: d.id, ...d.data()})); redraw(); }, warn)); }
   if (DB.isMgr()) {
     unsubs.push(db.collection('attendance').where('date', '==', today()).onSnapshot(s => { A.today = new Map(s.docs.map(d => [d.data().uid, d.data()])); A.loaded = true; redraw(); }, warn));
+    unsubs.push(db.collection('locations').where('date', '==', today()).where('mock', '==', true).onSnapshot(s => { A.mockToday = new Map(); s.docs.forEach(d => { const x = d.data(), a = A.mockToday.get(x.ownerUid) || []; a.push(x); A.mockToday.set(x.ownerUid, a.sort((p, q) => p.ts - q.ts)); }); redraw(); }, warn));
     unsubs.push(db.collection('leaves').where('to', '>=', LE.month(LE.addDays(LE.month() + '-01', -40)) + '-01').onSnapshot(s => { s.docs.forEach(d => A.leaves.set(d.id, {id: d.id, ...d.data()})); redraw(); }, warn));
   }
   if (DB.isAdmin()) unsubs.push(db.collection('salary').onSnapshot(s => { A.salary = new Map(s.docs.map(d => [d.id, d.data()])); redraw(); }, warn));
@@ -127,8 +128,40 @@ function compress(src, w0, h0, stamp) {      // -> JPEG data URL, 320px wide (3:
   let q = .72, out = c.toDataURL('image/jpeg', q); while (out.length > 48000 && q > .3) { q -= .08; out = c.toDataURL('image/jpeg', q); }
   return out;
 }
+const MOCK_MSG = 'Fake GPS detected — turn off mock location app';
+async function nativeFix() {
+  try {
+    const f = await window.LE_NATIVE.fix({timeoutMs: 25000, maxAgeMs: 10000});
+    return {lat: f.lat, lng: f.lng, acc: Math.round(f.accuracy), at: f.time || Date.now(), mock: !!f.mock, apps: f.mockAppsInstalled || [], active: f.mockAppsActive || [], legacy: !!f.legacyMockSetting};
+  } catch (e) {
+    const ms = await window.LE_NATIVE.mockStatus().catch(() => ({}));
+    return {err: (e && e.message) || 'Location not found', apps: ms.mockAppsInstalled || [], active: ms.mockAppsActive || [], legacy: !!ms.legacyMockSetting};
+  }
+}
+/* why this fix / phone must be refused (string) or '' */
+function mockReason(g) {
+  if (!g) return '';
+  const apps = g.apps || g.mockAppsInstalled || [], act = g.active || g.mockAppsActive || [];
+  if (g.mock) return act.length ? `Mock location from: ${act.join(', ')}` : 'Your phone reported this location as a mock (fake) location.';
+  if (act.length) return `Mock location app is ON: ${act.join(', ')}`;
+  if (apps.length) return `Uninstall this fake-GPS app to mark attendance: ${apps.join(', ')}`;
+  if (g.legacy || g.legacyMockSetting) return '“Allow mock locations” is ON in Developer options.';
+  return '';
+}
+function block(ctx, why) {
+  ctx.blocked = why || true; const s = $('#snap'), c = $('#confirm'); if (s) s.disabled = true; if (c) c.disabled = true; if (ctx.stopCam) ctx.stopCam(); const cm = $('#cammsg'); if (cm) { cm.hidden = false; cm.innerHTML = `${icon('alert')}<b>Attendance blocked</b><small>Fake GPS / mock location found on this phone</small>`; }
+  if (ctx.logged) return; ctx.logged = true;
+  const g = ctx.gps || {}; if (g.lat == null || !S.user) return;
+  // leave a trace for the owner: a FAKE GPS point on the live map, route and attendance board
+  const now = Date.now(), d = {ownerUid: S.user.uid, ownerName: S.profile.name, lat: g.lat, lng: g.lng, accuracy: g.acc || 0, ts: now, date: LE.dstr(now), source: 'android',
+    reason: ctx.kind === 'in' ? 'checkin-blocked' : 'checkout-blocked', mock: true, mockApp: String(why || '').slice(0, 200), appVersion: 'android-' + (window.LE_NATIVE.appVersion || ''), updatedAt: now};
+  const db = fs(); db.collection('locations').doc(S.user.uid + '_' + now.toString(36)).set(d).catch(e => console.warn('mock log', e.code));
+  db.collection('lastLocation').doc(S.user.uid).set(d).catch(e => console.warn('mock log', e.code));
+}
 const isNative = () => !!(window.LE_NATIVE && window.LE_NATIVE.platform);
-function capture(kind) {
+async function capture(kind) {
+  if (isNative() && window.LE_NATIVE.ready) await window.LE_NATIVE.ready;
+  const nat = isNative() && !!window.LE_NATIVE.mockCheck;        // v1.1 Android app: native fix + fake-GPS check
   const cur = A.mine.get(today());
   if (kind === 'in' && cur) return LE.toast('Already marked for today');
   if (kind === 'out' && (!cur || cur.status !== 'in')) return LE.toast('Check in first');
@@ -140,17 +173,23 @@ function capture(kind) {
     <div class="gps" id="agps">${icon('pin')}<span>Getting your location…</span></div>
     <p class="note" style="margin-top:8px">Take a live selfie at your work location. Photo, time and GPS go to Lalit Enterprises for attendance.</p>
     <div class="modal-f" id="camacts"><button type="button" class="btn ghost" data-close>Cancel</button><button type="button" class="btn pri" id="snap" disabled>${icon('camera')}Capture</button></div>`, 'att-modal');
-  const ctx = {kind, gps: null, img: null, stream: null, flags: [], src: isNative() ? (window.LE_NATIVE.platform || 'app') : 'web', addr: ''};
+  const ctx = {kind, nat, gps: null, img: null, stream: null, flags: [], src: isNative() ? (window.LE_NATIVE.platform || 'app') : 'web', addr: ''};
   const stopCam = () => { if (ctx.stream) ctx.stream.getTracks().forEach(t => t.stop()); ctx.stream = null; };
+  ctx.stopCam = stopCam;
   const obs = new MutationObserver(() => { if (!document.body.contains(m)) { stopCam(); obs.disconnect(); } }); obs.observe(document.body, {childList: true});
   const v = $('#camv'), img = $('#camimg'), msg = $('#cammsg'), snap = $('#snap'), file = $('#camfile');
   const stampTxt = () => [`LE ${kind === 'in' ? 'CHECK-IN' : 'CHECK-OUT'} · ${S.profile.name}`.slice(0, 44), `${new Date().toLocaleString('en-IN', {day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'})}${ctx.gps && ctx.gps.lat != null ? ` · ${ctx.gps.lat.toFixed(5)}, ${ctx.gps.lng.toFixed(5)} ±${ctx.gps.acc}m` : ' · no GPS'}`];
   const paintGps = () => { const b = $('#agps'); if (!b) return; const g = ctx.gps;
     if (!g) { b.className = 'gps'; b.innerHTML = `${icon('pin')}<span>Getting your location…</span>`; return; }
+    if (ctx.blocked) { b.className = 'gps mockbad'; b.innerHTML = `${icon('alert')}<span><b>${MOCK_MSG}</b>${ctx.blocked !== true ? '<br>' + esc(ctx.blocked) : ''}<br><small>नकली GPS / mock location ऐप बंद या अनइंस्टॉल करें, फिर दोबारा कोशिश करें।</small></span>`; return; }
     if (g.err) { b.className = 'gps bad'; b.innerHTML = `${icon('pin')}<span>${esc(g.err)}. Turn on GPS and allow location. <a href="#" id="regps">Try again</a></span>`; }
     else { b.className = 'gps ' + (g.acc > 200 ? 'bad' : 'ok'); b.innerHTML = `${icon(g.acc > 200 ? 'alert' : 'check')}<span>Location ±${g.acc} m${g.acc > 200 ? ' (weak — move to open sky if you can)' : ''} · <a href="${LE.map(g.lat, g.lng)}" target="_blank" rel="noopener">map</a>${ctx.addr ? ' · ' + esc(ctx.addr) : ''} · <a href="#" id="regps">refresh</a></span>`; }
     const r = $('#regps'); r && (r.onclick = e => { e.preventDefault(); ctx.gps = null; paintGps(); locate(); }); };
-  const locate = async () => { ctx.gps = await getGPS(); paintGps(); if (ctx.gps.lat != null) { ctx.addr = await geocode(ctx.gps.lat, ctx.gps.lng); paintGps(); } };
+  const locate = async () => {
+    ctx.gps = nat ? await nativeFix() : await getGPS();
+    const why = mockReason(ctx.gps);
+    if (why) { block(ctx, why); paintGps(); return; }
+    paintGps(); if (ctx.gps.lat != null) { ctx.addr = await geocode(ctx.gps.lat, ctx.gps.lng); paintGps(); } };
   locate();
   const useFile = () => { msg.hidden = false; msg.innerHTML = `<button type="button" class="btn pri lg" id="openfile">${icon('camera')}Open camera</button><small>Take a selfie now (gallery photos are not accepted)</small>`; $('#openfile').onclick = () => file.click(); snap.hidden = true; };
   file.onchange = () => { const f = file.files[0]; if (!f) return; const age = Date.now() - (f.lastModified || Date.now()); if (age > 120000) ctx.flags.push('oldPhoto'); ctx.flags.push('camApp');
@@ -158,16 +197,24 @@ function capture(kind) {
   const shown = () => { ctx.img = compress(ctx.raw, ctx.rawW, ctx.rawH, stampTxt()); img.src = ctx.img; img.hidden = false; v.hidden = true; msg.hidden = true; stopCam();
     $('#camacts').innerHTML = `<button type="button" class="btn ghost" id="retake">Retake</button><button type="button" class="btn pri" id="confirm">${icon('check')}Confirm ${kind === 'in' ? 'check-in' : 'check-out'}</button>`;
     $('#retake').onclick = () => { closeModal(); capture(kind); }; $('#confirm').onclick = () => submit(ctx); };
-  if (isNative() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) useFile();
+  const camDenied = () => { msg.hidden = false; snap.hidden = true; msg.innerHTML = `${icon('camera')}<b>Camera permission is off</b><small>Allow “Camera” for LE Sales, then try again. कैमरा की अनुमति दें।</small><div style="display:flex;gap:8px"><button type="button" class="btn" id="camset">Open settings</button><button type="button" class="btn pri" id="camretry">Try again</button></div>`;
+    $('#camset').onclick = () => window.LE_NATIVE.openSettings && window.LE_NATIVE.openSettings(); $('#camretry').onclick = () => { closeModal(); capture(kind); }; };
+  ctx.camDenied = camDenied;
+  if ((isNative() && !window.LE_NATIVE.liveCamera) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { if (nat) camDenied(); else useFile(); }
   else navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: {ideal: 720}, height: {ideal: 960}}, audio: false}).then(s => {
     if (!document.body.contains(m)) return s.getTracks().forEach(t => t.stop());
-    ctx.stream = s; v.srcObject = s; msg.hidden = true; snap.disabled = false;
+    if (ctx.blocked) { s.getTracks().forEach(t => t.stop()); return; } ctx.stream = s; v.srcObject = s; msg.hidden = true; snap.disabled = false;
     snap.onclick = () => { if (!v.videoWidth) return; const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); ctx.raw = c; ctx.rawW = c.width; ctx.rawH = c.height; shown(); };
-  }).catch(e => { console.warn('camera', e && e.name); useFile(); });
+  }).catch(e => { console.warn('camera', e && e.name); if (!document.body.contains(m)) return; if (nat) camDenied(); else useFile(); });
 }
 async function submit(ctx) {
   const b = $('#confirm'), g = ctx.gps;
+  if (ctx.blocked) { LE.toast(MOCK_MSG, 4000); return; }
   if (!g) { LE.toast('Still getting your location… wait a few seconds'); return; }
+  if (ctx.nat) {                                                  // re-check right before saving
+    const ms = await window.LE_NATIVE.mockStatus().catch(() => null), why = ms && mockReason(ms);
+    if (why) { block(ctx, why); const box = $('#agps'); box && (box.className = 'gps mockbad', box.innerHTML = `${icon('alert')}<span><b>${MOCK_MSG}</b><br>${esc(why === true ? '' : why)}</span>`); return; }
+  }
   if (g.err && !confirm('Location not captured. Save without GPS? It will be flagged for the owner.')) return;
   if (ctx.raw) ctx.img = compress(ctx.raw, ctx.rawW, ctx.rawH, [`LE ${ctx.kind === 'in' ? 'CHECK-IN' : 'CHECK-OUT'} · ${S.profile.name}`.slice(0, 44), `${new Date().toLocaleString('en-IN', {day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'})}${g.lat != null ? ` · ${g.lat.toFixed(5)}, ${g.lng.toFixed(5)} ±${g.acc}m` : ' · no GPS'}`]);
   b.disabled = true; b.textContent = 'Saving…';
@@ -227,6 +274,8 @@ function calendar(uid, m, recs, clickable) {
   }));
   return {html: `<div class="cal att-cal">${DOW.map(x => `<div class="dow">${x}</div>`).join('')}${cells.join('')}</div>`, sm};
 }
+const mocksOf = (uid, ds) => ds === today() ? (A.mockToday.get(uid) || []) : (A.mockDays.get(uid + '|' + ds) || []);
+const mockBox = pts => pts.length ? `<div class="err" style="margin-top:10px"><b>⚠ Fake GPS detected ${pts.length} time(s)</b> — ${pts.slice(0, 6).map(p => `${time(p.ts)} ${p.reason === 'checkin-blocked' ? '(check-in refused)' : p.reason === 'checkout-blocked' ? '(check-out refused)' : '(tracking)'}${p.mockApp ? ' · ' + esc(p.mockApp) : ''}`).join('; ')}${pts.length > 6 ? '…' : ''}</div>` : '';
 function dayModal(uid, ds) {
   const isMe = uid === S.user.uid, r = isMe ? A.mine.get(ds) : (A.month.get(`${uid}_${ds}`) || (ds === today() ? A.today.get(uid) : null));
   const u = isMe ? S.profile : (S.users.get(uid) || {name: r && r.name || ''}), code = dayStatus(uid, ds, r), lm = r && r.inTs ? lateMin(r) : 0;
@@ -239,7 +288,7 @@ function dayModal(uid, ds) {
   modal(`${mh(esc(u.name || '') + ' · ' + niceLong(ds))}
     <div class="att-head"><span class="tag st-${STAT[code][1]}">${STAT[code][0]}</span>${r && r.inTs && r.outTs ? `<span class="note" style="margin:0">${fmtH(hoursOf(r))} worked</span>` : ''}${lm ? `<span class="tag a">Late ${lm} min</span>` : ''}${holiday(ds) ? `<span class="note" style="margin:0">Holiday: ${esc(holiday(ds).name)}</span>` : ''}</div>
     ${r && r.ovStatus ? `<div class="ok" style="margin-top:10px">Corrected to <b>${STAT[r.ovStatus][0]}</b> by ${esc(r.ovByName || 'admin')}${r.ovAt && r.ovAt.toDate ? ' on ' + r.ovAt.toDate().toLocaleString('en-IN', {day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'}) : ''} — “${esc(r.ovReason)}”${r.ovFrom ? ` (was ${STAT[r.ovFrom] ? STAT[r.ovFrom][0] : r.ovFrom})` : ''}</div>` : ''}
-    <div class="att-sides">${side('in')}${side('out')}</div>${ovForm}`, 'att-modal');
+    ${DB.isMgr() && !isMe ? mockBox(mocksOf(uid, ds)) : ''}<div class="att-sides">${side('in')}${side('out')}</div>${ovForm}`, 'att-modal');
   $$('[data-ph]').forEach(async el => { const src = await photo(el.dataset.ph); el.innerHTML = src ? `<img src="${src}" alt="Attendance selfie">` : '<span class="note">No photo</span>'; if (src) el.onclick = () => lightbox(src); });
   const f = $('#ovf');
   f && (f.onsubmit = async e => { e.preventDefault(); const st2 = f.st.value, why = f.why.value.trim(); if (!why) return; const btn = f.querySelector('.btn.pri'); btn.disabled = true;
@@ -354,5 +403,5 @@ document.addEventListener('click', e => {
 setInterval(() => { if (!$('#modal') && staffRole() && ['today', 'myatt', ''].includes(location.hash.replace(/^#\/?/, '').split('/')[0])) render(); }, 60000);
 DB.on(w => { if (w === 'auth') return; if (A.dirty && !$('#modal')) { A.dirty = false; render(); } });
 
-return {A, lightbox, STAT, DOW, dayStatus, summarize, calendar, legend, dayModal, leaveLi, showPayslip, payslipHTML, todayCard, watchMonth, watchPayroll, photo, override, lateMin, hoursOf, fmtH, flagTags, holiday, isWO, daysOf, byDate, monthsBack, joinOf, staffRole, withTimeout, words, LT};
+return {A, mocksOf, MOCK_MSG, lightbox, STAT, DOW, dayStatus, summarize, calendar, legend, dayModal, leaveLi, showPayslip, payslipHTML, todayCard, watchMonth, watchPayroll, photo, override, lateMin, hoursOf, fmtH, flagTags, holiday, isWO, daysOf, byDate, monthsBack, joinOf, staffRole, withTimeout, words, LT};
 })();

@@ -128,3 +128,12 @@ Day rules: check-out with < half-day hours, or no check-out, = half-day. Late = 
 Pay: calendar basis (default) = salary ÷ days in month × (present + ½ half-days + paid leave + week-offs + holidays); working basis = salary ÷ working days × (present + ½ half-days + paid leave on working days). Optional: every N late marks = ½ day cut.
 
 Tests: `tests/rules-v3.test.mjs` (77 rule checks) and `tests/e2e-v3-emulator.mjs` (mock data, screenshots `screens/v3-*.png`). Run from `/workspace/le-sales-tools` with the emulators started (`firebase emulators:start --only firestore,auth`).
+
+
+## v3.1 — Fake GPS block (Android app 1.1.0)
+- In the **LE Sales Android app 1.1.0+** check-in/check-out is refused with *"Fake GPS detected — turn off mock location app"* when the location is a mock, a known fake-GPS app is installed or active, or "Allow mock locations" is on. Each refused attempt is saved as a `locations` point with `mock:true` (+ `mockApp`, `reason: checkin-blocked`).
+- All-day tracking points from a mocked phone are still saved, with `mock:true`.
+- Owner/manager see: red **Fake GPS detected today** banner + tag on Attendance › Today, red-outlined cells in the Monthly register (tap for times/app), **⚠ Fake GPS** tag + red ring on Map & live, red points on the Route.
+- Web browser / iPhone cannot detect mock locations — only the *Weak GPS* / *Old GPS fix* flags apply there.
+- `firestore.rules`: location docs may carry `mock` (bool) and `mockApp` (≤200 chars). **Publish the updated rules in the console.**
+- Test: `tests/e2e-fakegps-emulator.mjs` (emulator; stubs the native bridge).

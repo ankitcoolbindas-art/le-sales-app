@@ -317,3 +317,9 @@ tfoot td{border-top:1px solid var(--line2);font-size:13.5px}
 .pay td:first-child{min-width:210px}.reg th,.reg td{padding-left:6px;padding-right:6px}.reg td.rc{padding:7px 1px}.reg .sticky{min-width:140px}
 .toolbar{max-width:100%}.seg{max-width:100%;overflow-x:auto;scrollbar-width:none}.seg::-webkit-scrollbar{display:none}.seg button{white-space:nowrap;flex:0 0 auto}
 @media(max-width:560px){.payslip .ps-days th,.payslip .ps-days td{padding:5px 2px;font-size:10.5px;white-space:normal;word-break:break-word}}
+/* v3.1 fake GPS */
+.tag.mock{color:#fff;background:#e5484d}
+.mockbar{display:flex;gap:10px;align-items:flex-start;margin:0 0 12px;padding:11px 14px;border-radius:12px;background:rgba(229,72,77,.14);border:1px solid rgba(229,72,77,.5);color:#ffb1b1;font-size:13.5px}.mockbar b{color:#fff}.mockbar .ic{color:#ff6b6b;flex:0 0 auto;margin-top:1px}
+.gps.mockbad{color:#ffb1b1;border:1px solid rgba(229,72,77,.6);background:rgba(229,72,77,.12)}.gps.mockbad b{color:#fff}.gps.mockbad .ic{color:#ff6b6b}
+.reg td.rc.mock{box-shadow:inset 0 0 0 2px #e5484d}
+.mock-key{display:inline-block;padding:0 4px;border-radius:3px;box-shadow:inset 0 0 0 2px #e5484d;color:#ffb1b1}

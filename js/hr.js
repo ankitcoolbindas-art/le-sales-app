@@ -11,10 +11,11 @@ const recsOf = (uid, m) => new Map([...A.month.values()].filter(r => r.uid === u
 const csvq = v => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
 const csv = (head, rows) => '\ufeff' + head.join(',') + '\n' + rows.map(r => r.map(csvq).join(',')).join('\n');
 const avatar = u => `<span class="avatar sm">${LE.initials(u.name)}</span>`;
-let leavesFor = '';
+let leavesFor = '', mocksAt = 0;
 function monthData(m) {
   X.watchMonth(m);
   if (leavesFor !== m) { leavesFor = m; fs().collection('leaves').where('to', '>=', m + '-01').get().then(s => { s.docs.forEach(d => A.leaves.set(d.id, {id: d.id, ...d.data()})); render(); }).catch(e => console.warn(e)); }
+  if (Date.now() - mocksAt > 120000) { mocksAt = Date.now(); fs().collection('locations').where('mock', '==', true).limit(2000).get().then(s => { A.mockDays = new Map(); s.docs.forEach(d => { const x = d.data(), k = x.ownerUid + '|' + x.date, a = A.mockDays.get(k) || []; a.push(x); A.mockDays.set(k, a); }); render(); }).catch(e => console.warn(e)); }
   return A.monthLoaded === m;
 }
 
@@ -38,12 +39,13 @@ function board() {
   const item = ({u, r, code, late}) => {
     const loc = (k) => r && r[k + 'Lat'] != null ? `<a href="${LE.map(r[k + 'Lat'], r[k + 'Lng'])}" target="_blank" rel="noopener">📍 ${r[k + 'Addr'] ? esc(r[k + 'Addr'].split(',').slice(0, 2).join(',')) : 'map'} ±${r[k + 'Acc']}m</a>` : r && r[k + 'Ts'] ? '<span style="color:var(--red)">no GPS</span>' : '';
     return `<div class="li tap att-row" data-attday="${u.uid}|${d}"><div class="thumbs">${r && r.inTs ? `<span class="thumb" data-thumb="${u.uid}_${d}_in"></span>` : `<span class="avatar">${LE.initials(u.name)}</span>`}${r && r.outTs ? `<span class="thumb" data-thumb="${u.uid}_${d}_out"></span>` : ''}</div>
-      <div class="b"><div class="t"><span>${esc(u.name)}</span><span class="tag st-${X.STAT[code][1]}">${code === 'PEND' ? (afterStart ? 'Not in' : 'Not yet') : X.STAT[code][0]}</span></div>
+      <div class="b"><div class="t"><span>${esc(u.name)}${A.mockToday.has(u.uid) ? ' <span class="tag mock">⚠ Fake GPS</span>' : ''}</span><span class="tag st-${X.STAT[code][1]}">${code === 'PEND' ? (afterStart ? 'Not in' : 'Not yet') : X.STAT[code][0]}</span></div>
       <div class="m">${r && r.inTs ? `<span>In <b>${time(r.inTs)}</b>${late ? ` <span class="tag a">Late ${late}m</span>` : ''}</span><span>·</span><span>${loc('in')}</span>` : `<span>${esc(u.territory || LE.ROLES[u.role])}</span>`}
       ${r && r.outTs ? `<span>·</span><span>Out <b>${time(r.outTs)}</b> · ${X.fmtH(X.hoursOf(r))}</span><span>·</span><span>${loc('out')}</span>` : r && r.inTs ? `<span>·</span><span>${X.fmtH((Date.now() - r.inTs) / 3600000)} so far</span>` : ''}
       ${r && r.ovStatus ? `<span>·</span><span>corrected: ${esc(r.ovReason)}</span>` : ''}</div>${X.flagTags([...(r && r.inFlags || []), ...(r && r.outFlags || [])].filter((x, i, a) => a.indexOf(x) === i))}</div></div>`;
   };
   return `<div class="kpis k4" style="margin-bottom:14px">${kpi('green', 'check', n(['IN', 'P', 'H']), 'Checked in', `${rows.filter(x => x.r && x.r.outTs).length} checked out`)}${kpi('amber', 'clock', late, 'Late today', `after ${A.settings.start} + ${A.settings.grace} min`)}${kpi('red', 'x', n(['PEND', 'A']), afterStart ? 'Not checked in' : 'Not in yet')}${kpi('violet', 'cal', n(['L', 'LWP', 'WO', 'HO']), 'Leave / off')}</div>
+    ${A.mockToday.size ? `<div class="mockbar">${icon('alert')}<div><b>Fake GPS detected today</b> — ${[...A.mockToday].map(([uid, pts]) => `${esc((S.users.get(uid) || {}).name || pts[0].ownerName)}: ${pts.length}× from ${time(pts[0].ts)}${pts.some(p => /blocked/.test(p.reason)) ? ' (attendance refused)' : ''}`).join(' · ')}</div></div>` : ''}
     <div class="card-h" style="margin:4px 2px 8px"><h3>${LE.niceLong(d)}</h3><span class="sub">${A.loaded ? 'Live · tap a person for photos, map and corrections' : 'Loading…'}</span></div>
     ${listCard(rows.map(item), 'No employees yet. Add them in Team → Employees.')}`;
 }
@@ -51,9 +53,9 @@ function register() {
   const m = st.q.am || LE.month(), ok = monthData(m), days = X.daysOf(m), ppl = staff(m);
   const rows = ppl.map(u => ({u, sm: X.summarize(u.uid, m, recsOf(u.uid, m))}));
   st.regRows = {m, rows};
-  return `<div class="card pad0"><div class="tbl-tools">${monthSel('am', LE.month())}<span class="note" style="margin:0;flex:1">P present · H half-day · A absent · L leave · WO week-off · HO holiday · <i class="late-dot"></i> late · <i class="ov-dot"></i> corrected${DB.isAdmin() ? ' · tap a cell to view / correct' : ''}</span><button class="btn" id="regcsv">${icon('download')}Export CSV</button></div>
+  return `<div class="card pad0"><div class="tbl-tools">${monthSel('am', LE.month())}<span class="note" style="margin:0;flex:1">P present · H half-day · A absent · L leave · WO week-off · HO holiday · <i class="late-dot"></i> late · <i class="ov-dot"></i> corrected · <span class="mock-key">red box</span> fake GPS${DB.isAdmin() ? ' · tap a cell to view / correct' : ''}</span><button class="btn" id="regcsv">${icon('download')}Export CSV</button></div>
     <div class="tbl-wrap reg">${!ok ? '<div class="empty" style="margin:14px">Loading…</div>' : `<table><thead><tr><th class="sticky">Employee</th>${days.map(ds => `<th class="dcol ${X.isWO(ds) || X.holiday(ds) ? 'off' : ''} ${ds === today() ? 'is-today' : ''}">${+ds.slice(8)}<small>${X.DOW[new Date(ds + 'T12:00:00').getDay()][0]}</small></th>`).join('')}<th class="r">P</th><th class="r">H</th><th class="r">A</th><th class="r">L</th><th class="r">Off</th><th class="r">Late</th></tr></thead>
-    <tbody>${rows.map(({u, sm}) => `<tr><td class="sticky"><div class="who">${avatar(u)}<b>${esc(u.name)}</b></div></td>${sm.rows.map(({ds, code, r}) => `<td class="rc st-${X.STAT[code][1]}" ${r || (code && code !== 'NJ') ? `data-attday="${u.uid}|${ds}"` : ''}>${code && code !== 'NJ' ? code.replace('PEND', '–').replace('IN', 'P').replace('LWP', 'L') : ''}${r && r.inTs && !r.ovStatus && X.lateMin(r) ? '<i class="late"></i>' : ''}${r && r.ovStatus ? '<i class="ov"></i>' : ''}</td>`).join('')}
+    <tbody>${rows.map(({u, sm}) => `<tr><td class="sticky"><div class="who">${avatar(u)}<b>${esc(u.name)}</b></div></td>${sm.rows.map(({ds, code, r}) => `<td class="rc st-${X.STAT[code][1]}${X.mocksOf(u.uid, ds).length ? ' mock' : ''}" ${r || (code && code !== 'NJ') || X.mocksOf(u.uid, ds).length ? `data-attday="${u.uid}|${ds}"` : ''}>${code && code !== 'NJ' ? code.replace('PEND', '–').replace('IN', 'P').replace('LWP', 'L') : ''}${r && r.inTs && !r.ovStatus && X.lateMin(r) ? '<i class="late"></i>' : ''}${r && r.ovStatus ? '<i class="ov"></i>' : ''}</td>`).join('')}
       <td class="r"><b>${sm.present}</b></td><td class="r">${sm.half}</td><td class="r">${sm.absent}</td><td class="r">${sm.paidLeave + sm.unpaidLeave}</td><td class="r">${sm.weekOffs + sm.holidays}</td><td class="r">${sm.late}</td></tr>`).join('') || `<tr><td colspan="${days.length + 7}"><div class="empty">No employees</div></td></tr>`}</tbody></table>`}</div></div>`;
 }
 function regCSV() {

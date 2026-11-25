@@ -116,5 +116,14 @@ await t('sales cannot write payroll', assertFails(setDoc(doc(s2, `payroll/s2_${M
 await t('payroll id must be uid_month', assertFails(setDoc(doc(admin, `payroll/s2_2020-01`), pay('s2'))));
 await t('nobody deletes payroll', assertFails(deleteDoc(doc(admin, `payroll/s1_${MONTH}`))));
 await t('deactivated user cannot read payslips', assertFails(getDocs(query(collection(x1, 'payroll'), where('uid', '==', 'x1'), where('status', '==', 'finalized')))));
+// ---- v3.1 fake GPS points ----
+const loc = (uid, extra = {}) => ({ownerUid: uid, ownerName: uid, lat: 23.36, lng: 85.32, accuracy: 10, ts: Date.now(), date: TODAY, source: 'android', reason: 'checkin-blocked', updatedAt: Date.now(), ...extra});
+await t('sales writes a FAKE GPS point (mock + app name)', assertSucceeds(setDoc(doc(s1, 'locations/s1_mock1'), loc('s1', {mock: true, mockApp: 'Fake GPS Location'}))));
+await t('mock must be boolean', assertFails(setDoc(doc(s1, 'locations/s1_mock2'), loc('s1', {mock: 'yes'}))));
+await t('mockApp max 200 chars', assertFails(setDoc(doc(s1, 'locations/s1_mock3'), loc('s1', {mock: true, mockApp: 'x'.repeat(201)}))));
+await t('lastLocation accepts mock flag', assertSucceeds(setDoc(doc(s1, 'lastLocation/s1'), loc('s1', {mock: true}))));
+await t('manager lists today fake-GPS points', assertSucceeds(getDocs(query(collection(m1, 'locations'), where('date', '==', TODAY), where('mock', '==', true)))));
+await t('sales cannot list fake-GPS points of others', assertFails(getDocs(query(collection(s2, 'locations'), where('mock', '==', true)))));
+await t('sales cannot remove own mock flag (append-only)', assertFails(setDoc(doc(s1, 'locations/s1_mock1'), loc('s1', {mock: false}))));
 console.log(results.join('\n')); console.log(`\n${results.length - fail}/${results.length} passed`);
 await env.cleanup(); process.exit(fail ? 1 : 0);
